@@ -10,6 +10,9 @@ import {
   CoinbaseWalletAdapter
 } from "@solana/wallet-adapter-wallets";
 
+// ✅ THIS LINE RESTORES ORIGINAL WALLET UI + MODAL
+import "@solana/wallet-adapter-react-ui/styles.css";
+
 export default function Providers({ children }: { children: React.ReactNode }) {
   const endpoint = useMemo(() => {
     // Always use same-origin proxy to avoid browser CORS issues with RPC providers.
