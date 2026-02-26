@@ -26,11 +26,3 @@ body {
   background-clip: text;
   color: transparent;
 }
-/* Always keep the Solana wallet picker modal above all overlays */
-.wallet-adapter-modal-wrapper {
-  z-index: 100000 !important;
-}
-
-.wallet-adapter-modal-overlay {
-  z-index: 99999 !important;
-}
