@@ -25,17 +25,13 @@ export default function GetStartedModal({
   const [loading, setLoading] = useState<null | "signin" | "pay">(null);
   const [step, setStep] = useState<Step>("connect");
 
-  const shouldPromptSubscribe = useMemo(
-    () => params.get("subscribe") === "1",
-    [params]
-  );
+  const shouldPromptSubscribe = useMemo(() => params.get("subscribe") === "1", [params]);
 
   if (!open) return null;
 
   async function handleSignInThenRefreshContext() {
     if (!publicKey) return alert("Connect a wallet first.");
-    if (!signMessage)
-      return alert("This wallet does not support message signing.");
+    if (!signMessage) return alert("This wallet does not support message signing.");
 
     setLoading("signin");
     try {
@@ -45,15 +41,10 @@ export default function GetStartedModal({
         alert("Failed to start sign-in. Try again.");
         return;
       }
-
-      const { message } = (await nonceRes.json()) as {
-        message: string;
-      };
+      const { message } = (await nonceRes.json()) as { message: string };
 
       // 2) Sign message
-      const signatureBytes = await signMessage(
-        new TextEncoder().encode(message)
-      );
+      const signatureBytes = await signMessage(new TextEncoder().encode(message));
 
       // 3) Verify on server (sets session cookie)
       const verifyRes = await fetch("/api/auth/verify", {
@@ -72,10 +63,7 @@ export default function GetStartedModal({
       }
 
       // 4) Refresh context (role + subscription) from Supabase
-      const ctxRes = await fetch("/api/context/refresh", {
-        method: "POST"
-      });
-
+      const ctxRes = await fetch("/api/context/refresh", { method: "POST" });
       if (!ctxRes.ok) {
         // If this fails, still allow them to proceed to subscribe step
         setStep("subscribe");
@@ -83,19 +71,10 @@ export default function GetStartedModal({
       }
 
       const ctx = (await ctxRes.json().catch(() => null)) as
-        | {
-            ok: true;
-            role: "user" | "dev" | "admin";
-            subscribedActive: boolean;
-          }
+        | { ok: true; role: "user" | "dev" | "admin"; subscribedActive: boolean }
         | null;
 
-      if (
-        ctx?.ok &&
-        (ctx.role === "dev" ||
-          ctx.role === "admin" ||
-          ctx.subscribedActive)
-      ) {
+      if (ctx?.ok && (ctx.role === "dev" || ctx.role === "admin" || ctx.subscribedActive)) {
         onClose();
         router.push("/dashboard");
         return;
@@ -113,20 +92,13 @@ export default function GetStartedModal({
 
   async function handleStartSubscription() {
     if (!publicKey) return alert("Connect a wallet first.");
-    if (!sendTransaction)
-      return alert("Wallet cannot send transactions.");
+    if (!sendTransaction) return alert("Wallet cannot send transactions.");
 
     const treasury = process.env.NEXT_PUBLIC_TREASURY_WALLET;
-    const priceSol = Number(
-      process.env.NEXT_PUBLIC_SUB_PRICE_SOL ?? "0"
-    );
+    const priceSol = Number(process.env.NEXT_PUBLIC_SUB_PRICE_SOL ?? "0");
 
-    if (!treasury)
-      return alert(
-        "Missing NEXT_PUBLIC_TREASURY_WALLET (set in Vercel env)."
-      );
-    if (!Number.isFinite(priceSol) || priceSol <= 0)
-      return alert("Missing NEXT_PUBLIC_SUB_PRICE_SOL.");
+    if (!treasury) return alert("Missing NEXT_PUBLIC_TREASURY_WALLET (set in Vercel env).");
+    if (!Number.isFinite(priceSol) || priceSol <= 0) return alert("Missing NEXT_PUBLIC_SUB_PRICE_SOL.");
 
     setLoading("pay");
 
@@ -136,7 +108,6 @@ export default function GetStartedModal({
 
       // Force fee payer + blockhash for consistency
       const latest = await connection.getLatestBlockhash("confirmed");
-
       const tx = new Transaction({
         feePayer: publicKey,
         recentBlockhash: latest.blockhash
@@ -154,14 +125,11 @@ export default function GetStartedModal({
       let lastErr: any = null;
 
       for (let i = 0; i < 12; i++) {
-        const confirmRes = await fetch(
-          "/api/payments/confirm-subscription",
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ signature: sig })
-          }
-        );
+        const confirmRes = await fetch("/api/payments/confirm-subscription", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ signature: sig })
+        });
 
         if (confirmRes.ok) {
           onClose();
@@ -173,10 +141,7 @@ export default function GetStartedModal({
         await new Promise((r) => setTimeout(r, 1200));
       }
 
-      alert(
-        lastErr?.error ??
-          "Payment sent, but verification timed out. Try again in 10 seconds."
-      );
+      alert(lastErr?.error ?? "Payment sent, but verification timed out. Try again in 10 seconds.");
     } catch (e: any) {
       console.error("Subscription payment error:", e);
       const msg =
@@ -202,12 +167,9 @@ export default function GetStartedModal({
               {step === "subscribe" && "Start subscription"}
             </h2>
             <p className="mt-1 text-sm text-zinc-300">
-              {step === "connect" &&
-                "Connect your Solana wallet to continue."}
-              {step === "signin" &&
-                "Sign a message to prove wallet ownership. No transactions."}
-              {step === "subscribe" &&
-                "Pay the monthly fee in SOL to unlock Authswap."}
+              {step === "connect" && "Connect your Solana wallet to continue."}
+              {step === "signin" && "Sign a message to prove wallet ownership. No transactions."}
+              {step === "subscribe" && "Pay the monthly fee in SOL to unlock Authswap."}
             </p>
           </div>
 
@@ -259,8 +221,7 @@ export default function GetStartedModal({
               </div>
 
               <p className="mt-2 text-xs text-emerald-200/80">
-                You’ll sign a transaction sending SOL to Authswap. This unlocks
-                access for 30 days.
+                You’ll sign a transaction sending SOL to Authswap. This unlocks access for 30 days.
               </p>
 
               <button
@@ -268,9 +229,7 @@ export default function GetStartedModal({
                 disabled={loading === "pay"}
                 onClick={handleStartSubscription}
               >
-                {loading === "pay"
-                  ? "Processing..."
-                  : "Start subscription"}
+                {loading === "pay" ? "Processing..." : "Start subscription"}
               </button>
             </div>
           )}
