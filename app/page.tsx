@@ -1,11 +1,20 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import GetStartedModal from "@/components/GetStartedModal";
 import Footer from "@/components/Footer";
 
 export default function HomePage() {
+  const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
+
+  // Auto-open if redirected from protected pages
+  useEffect(() => {
+    const subscribe = searchParams.get("subscribe") === "1";
+    const getstarted = searchParams.get("getstarted") === "1";
+    if (subscribe || getstarted) setOpen(true);
+  }, [searchParams]);
 
   return (
     <main className="bg-authswap min-h-screen text-white">
@@ -34,7 +43,7 @@ export default function HomePage() {
           </button>
 
           <div className="text-sm text-zinc-400">
-            Connect wallet → (next chunk) sign in → (next chunk) subscribe
+            Connect wallet → sign in → subscribe → dashboard
           </div>
         </div>
 
@@ -57,14 +66,8 @@ export default function HomePage() {
         <GetStartedModal open={open} onClose={() => setOpen(false)} />
 
         <Footer
-          onInviteCode={() => {
-            // Chunk 4: open invite code modal
-            alert("Invite code flow comes later (dev onboarding chunk).");
-          }}
-          onBecomeDev={() => {
-            // Chunk 4: open become-dev payment modal
-            alert("Become a dev flow comes later (dev onboarding chunk).");
-          }}
+          onInviteCode={() => alert("Invite code flow comes later (dev onboarding chunk).")}
+          onBecomeDev={() => alert("Become a dev flow comes later (dev onboarding chunk).")}
         />
       </div>
     </main>
