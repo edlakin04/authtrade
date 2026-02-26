@@ -8,8 +8,7 @@ import {
   PhantomWalletAdapter,
   SolflareWalletAdapter,
   TrustWalletAdapter,
-  CoinbaseWalletAdapter,
-  GlowWalletAdapter
+  CoinbaseWalletAdapter
 } from "@solana/wallet-adapter-wallets";
 
 import "@solana/wallet-adapter-react-ui/styles.css";
@@ -22,8 +21,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       new PhantomWalletAdapter(),
       new SolflareWalletAdapter(),
       new TrustWalletAdapter(),
-      new CoinbaseWalletAdapter(),
-      new GlowWalletAdapter()
+      new CoinbaseWalletAdapter()
     ],
     []
   );
@@ -31,9 +29,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   return (
     <ConnectionProvider endpoint={endpoint}>
       <WalletProvider wallets={wallets} autoConnect>
-        <WalletModalProvider>
-          {children}
-        </WalletModalProvider>
+        <WalletModalProvider>{children}</WalletModalProvider>
       </WalletProvider>
     </ConnectionProvider>
   );
