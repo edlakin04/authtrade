@@ -17,7 +17,7 @@ export default function TradeInner() {
       <div className="mx-auto max-w-5xl px-6 py-10">
         <h1 className="text-2xl font-semibold">Trade</h1>
         <p className="mt-1 text-sm text-zinc-400">
-          Swap using Jupiter inside Authswap. Your trade may generate referral fees for the platform.
+          Swap using Jupiter inside Authswap.
         </p>
 
         <div className="mt-6">
