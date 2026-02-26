@@ -4,15 +4,20 @@ import React, { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import GetStartedModal from "@/components/GetStartedModal";
 import Footer from "@/components/Footer";
+import InviteCodeModal from "@/components/InviteCodeModal";
+import BecomeDevModal from "@/components/BecomeDevModal";
 
 export default function HomeClient() {
   const searchParams = useSearchParams();
-  const [open, setOpen] = useState(false);
+
+  const [openGetStarted, setOpenGetStarted] = useState(false);
+  const [openInvite, setOpenInvite] = useState(false);
+  const [openBecomeDev, setOpenBecomeDev] = useState(false);
 
   useEffect(() => {
     const subscribe = searchParams.get("subscribe") === "1";
     const getstarted = searchParams.get("getstarted") === "1";
-    if (subscribe || getstarted) setOpen(true);
+    if (subscribe || getstarted) setOpenGetStarted(true);
   }, [searchParams]);
 
   return (
@@ -35,14 +40,14 @@ export default function HomeClient() {
 
         <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
           <button
-            onClick={() => setOpen(true)}
+            onClick={() => setOpenGetStarted(true)}
             className="rounded-2xl bg-white px-6 py-3 text-sm font-semibold text-black hover:bg-zinc-200"
           >
             Get started
           </button>
 
           <div className="text-sm text-zinc-400">
-            Connect wallet → sign in → subscribe → dashboard
+            Connect wallet → sign in → subscribe (or dev access) → dashboard
           </div>
         </div>
 
@@ -59,11 +64,13 @@ export default function HomeClient() {
           ))}
         </div>
 
-        <GetStartedModal open={open} onClose={() => setOpen(false)} />
+        <GetStartedModal open={openGetStarted} onClose={() => setOpenGetStarted(false)} />
+        <InviteCodeModal open={openInvite} onClose={() => setOpenInvite(false)} />
+        <BecomeDevModal open={openBecomeDev} onClose={() => setOpenBecomeDev(false)} />
 
         <Footer
-          onInviteCode={() => alert("Invite code flow comes later (dev onboarding chunk).")}
-          onBecomeDev={() => alert("Become a dev flow comes later (dev onboarding chunk).")}
+          onInviteCode={() => setOpenInvite(true)}
+          onBecomeDev={() => setOpenBecomeDev(true)}
         />
       </div>
     </main>
