@@ -1,18 +1,29 @@
+import "./globals.css";
 import type { Metadata } from "next";
 import Providers from "./providers";
-import "@solana/wallet-adapter-react-ui/styles.css";
-import "./globals.css";
+import JupiterPluginProvider from "@/components/JupiterPluginProvider";
 
 export const metadata: Metadata = {
   title: "Authswap",
-  description: "Verified devs, trending coins, and swaps on Solana."
+  description: "Private memecoin intelligence & trading platform"
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children
+}: {
+  children: React.ReactNode;
+}) {
   return (
-    <html lang="en" className="dark">
-      <body>
-        <Providers>{children}</Providers>
+    <html lang="en">
+      <body className="bg-authswap text-white">
+        {/* Solana Wallet Providers */}
+        <Providers>
+          {/* Jupiter Plugin Script Loader */}
+          <JupiterPluginProvider />
+
+          {/* App Content */}
+          {children}
+        </Providers>
       </body>
     </html>
   );
