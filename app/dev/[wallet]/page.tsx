@@ -194,14 +194,6 @@ export default function DevPublicPage({
                         <div className="text-sm font-semibold">{c.title ?? "Untitled coin"}</div>
                         <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
                         {c.description ? <div className="mt-2 text-xs text-zinc-300">{c.description}</div> : null}
-
-                        <Link
-                          href={`/trade?outputMint=${encodeURIComponent(c.token_address)}`}
-                          className="mt-3 inline-block rounded-xl bg-white px-3 py-2 text-xs font-semibold text-black hover:bg-zinc-200"
-                          title="Open Jupiter swap"
-                        >
-                          Trade
-                        </Link>
                       </div>
                     ))
                   )}
