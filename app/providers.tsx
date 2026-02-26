@@ -7,8 +7,7 @@ import {
   PhantomWalletAdapter,
   SolflareWalletAdapter,
   TrustWalletAdapter,
-  CoinbaseWalletAdapter,
-  BackpackWalletAdapter
+  CoinbaseWalletAdapter
 } from "@solana/wallet-adapter-wallets";
 import { clusterApiUrl } from "@solana/web3.js";
 
@@ -20,10 +19,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       new PhantomWalletAdapter(),
       new SolflareWalletAdapter(),
       new TrustWalletAdapter(),
-      new CoinbaseWalletAdapter(),
-      new BackpackWalletAdapter()
-      // Glow: adapter is flagged “no longer supported” in newer packages.
-      // We can try adding it later, but we’ll keep Chunk 1 stable.
+      new CoinbaseWalletAdapter()
     ],
     []
   );
