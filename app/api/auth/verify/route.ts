@@ -13,7 +13,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Missing publicKey or signature" }, { status: 400 });
   }
 
-  const nonceCookie = cookies().get("authswap_nonce")?.value;
+  // Next.js 15: cookies() is async
+  const cookieStore = await cookies();
+  const nonceCookie = cookieStore.get("authswap_nonce")?.value;
+
   if (!nonceCookie) {
     return NextResponse.json({ error: "Missing nonce (refresh and try again)" }, { status: 400 });
   }
@@ -34,8 +37,6 @@ export async function POST(req: Request) {
 
   const res = NextResponse.json({ ok: true });
   res.headers.set("Set-Cookie", sessionCookie(token));
-
-  // clear nonce cookie
   res.headers.append(
     "Set-Cookie",
     `authswap_nonce=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`
