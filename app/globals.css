@@ -26,3 +26,10 @@ body {
   background-clip: text;
   color: transparent;
 }
+/* Ensure Solana wallet picker modal is always clickable and on top */
+.wallet-adapter-modal-overlay {
+  z-index: 999999 !important;
+}
+.wallet-adapter-modal-wrapper {
+  z-index: 1000000 !important;
+}
