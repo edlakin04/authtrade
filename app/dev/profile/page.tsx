@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import TopNav from "@/components/TopNav";
 
 type Profile = {
   wallet: string;
@@ -147,6 +148,8 @@ export default function DevProfilePage() {
 
   return (
     <main className="min-h-screen bg-authswap text-white">
+      <TopNav />
+
       <div className="mx-auto max-w-5xl px-6 py-10">
         <h1 className="text-2xl font-semibold">Dev Profile</h1>
         <p className="mt-1 text-sm text-zinc-400">Edit your public profile, post updates, and list coins.</p>
@@ -159,36 +162,59 @@ export default function DevProfilePage() {
               <h2 className="text-lg font-semibold">Profile</h2>
 
               <div className="mt-4 grid gap-3">
-                <input className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
-                  placeholder="Display name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-                <input className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
-                  placeholder="Profile image URL (optional)" value={pfpUrl} onChange={(e) => setPfpUrl(e.target.value)} />
-                <input className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
-                  placeholder="X/Twitter URL (optional)" value={xUrl} onChange={(e) => setXUrl(e.target.value)} />
-                <textarea className="min-h-[100px] rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
-                  placeholder="Bio (optional)" value={bio} onChange={(e) => setBio(e.target.value)} />
+                <input
+                  className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
+                  placeholder="Display name"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                />
+                <input
+                  className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
+                  placeholder="Profile image URL (optional)"
+                  value={pfpUrl}
+                  onChange={(e) => setPfpUrl(e.target.value)}
+                />
+                <input
+                  className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
+                  placeholder="X/Twitter URL (optional)"
+                  value={xUrl}
+                  onChange={(e) => setXUrl(e.target.value)}
+                />
+                <textarea
+                  className="min-h-[100px] rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
+                  placeholder="Bio (optional)"
+                  value={bio}
+                  onChange={(e) => setBio(e.target.value)}
+                />
               </div>
 
-              <button onClick={saveProfile}
-                className="mt-4 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200">
+              <button
+                onClick={saveProfile}
+                className="mt-4 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200"
+              >
                 Save profile
               </button>
 
-              <button onClick={deleteProfile}
-                className="mt-3 w-full rounded-xl bg-red-500/90 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500">
+              <button
+                onClick={deleteProfile}
+                className="mt-3 w-full rounded-xl bg-red-500/90 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500"
+              >
                 Delete profile
               </button>
             </div>
 
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
               <h2 className="text-lg font-semibold">Post an update</h2>
-              <textarea className="mt-3 min-h-[110px] w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
+              <textarea
+                className="mt-3 min-h-[110px] w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
                 placeholder="e.g. Launching something soon…"
                 value={postContent}
                 onChange={(e) => setPostContent(e.target.value)}
               />
-              <button onClick={createPost}
-                className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200">
+              <button
+                onClick={createPost}
+                className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200"
+              >
                 Post update
               </button>
 
@@ -213,25 +239,30 @@ export default function DevProfilePage() {
               <h2 className="text-lg font-semibold">Coins</h2>
 
               <div className="mt-4 grid gap-3 md:grid-cols-3">
-                <input className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
+                <input
+                  className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
                   placeholder="Token address"
                   value={coinAddr}
                   onChange={(e) => setCoinAddr(e.target.value)}
                 />
-                <input className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
+                <input
+                  className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
                   placeholder="Title (optional)"
                   value={coinTitle}
                   onChange={(e) => setCoinTitle(e.target.value)}
                 />
-                <input className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
+                <input
+                  className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
                   placeholder="Short description (optional)"
                   value={coinDesc}
                   onChange={(e) => setCoinDesc(e.target.value)}
                 />
               </div>
 
-              <button onClick={addCoin}
-                className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200">
+              <button
+                onClick={addCoin}
+                className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200"
+              >
                 Add coin
               </button>
 
@@ -240,7 +271,10 @@ export default function DevProfilePage() {
                   <div className="text-sm text-zinc-500">No coins yet.</div>
                 ) : (
                   coins.map((c) => (
-                    <div key={c.id} className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/30 p-3">
+                    <div
+                      key={c.id}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/30 p-3"
+                    >
                       <div className="min-w-0">
                         <div className="text-sm font-semibold text-zinc-200">{c.title ?? "Untitled coin"}</div>
                         <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
@@ -257,7 +291,6 @@ export default function DevProfilePage() {
                 )}
               </div>
             </div>
-
           </div>
         )}
       </div>
