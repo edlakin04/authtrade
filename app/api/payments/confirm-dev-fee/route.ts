@@ -1,0 +1,94 @@
+import { NextResponse } from "next/server";
+import { Connection, PublicKey } from "@solana/web3.js";
+import { cookies } from "next/headers";
+import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json().catch(() => null);
+    const signature = body?.signature as string | undefined;
+    if (!signature) return NextResponse.json({ error: "Missing signature" }, { status: 400 });
+
+    const cookieStore = await cookies();
+    const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+    if (!sessionToken) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+
+    const sessionData = await readSessionToken(sessionToken).catch(() => null);
+    if (!sessionData?.wallet) return NextResponse.json({ error: "Invalid session" }, { status: 401 });
+
+    const rpcUrl = process.env.SOLANA_RPC_URL;
+    if (!rpcUrl) return NextResponse.json({ error: "Server missing SOLANA_RPC_URL" }, { status: 500 });
+
+    const devTreasury = process.env.DEV_TREASURY_WALLET;
+    if (!devTreasury) return NextResponse.json({ error: "Server missing DEV_TREASURY_WALLET" }, { status: 500 });
+
+    const feeSol = Number(process.env.DEV_FEE_SOL ?? "0");
+    if (!Number.isFinite(feeSol) || feeSol <= 0) {
+      return NextResponse.json({ error: "Server missing/invalid DEV_FEE_SOL" }, { status: 500 });
+    }
+
+    const connection = new Connection(rpcUrl, "confirmed");
+    const tx = await connection.getTransaction(signature, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0
+    });
+
+    if (!tx || !tx.meta) {
+      return NextResponse.json({ error: "Transaction not confirmed yet. Try again." }, { status: 400 });
+    }
+
+    const staticKeys = tx.transaction.message.getAccountKeys().staticAccountKeys;
+    const payer = staticKeys[0]?.toBase58();
+    if (!payer || payer !== sessionData.wallet) {
+      return NextResponse.json({ error: "Payer wallet mismatch" }, { status: 400 });
+    }
+
+    const treasuryKey = new PublicKey(devTreasury);
+    const treasuryIndex = staticKeys.findIndex((k) => k.equals(treasuryKey));
+    if (treasuryIndex === -1) {
+      return NextResponse.json({ error: "Dev treasury not involved in transaction" }, { status: 400 });
+    }
+
+    const preLamports = tx.meta.preBalances[treasuryIndex] ?? 0;
+    const postLamports = tx.meta.postBalances[treasuryIndex] ?? 0;
+    const deltaLamports = postLamports - preLamports;
+    const deltaSol = deltaLamports / 1_000_000_000;
+
+    if (deltaSol + 1e-9 < feeSol) {
+      return NextResponse.json(
+        { error: `Dev fee too low. Received ~${deltaSol.toFixed(4)} SOL` },
+        { status: 400 }
+      );
+    }
+
+    const sb = supabaseAdmin();
+
+    await sb.from("users").upsert({ wallet: sessionData.wallet });
+
+    // Dedupe payment
+    const { data: existing } = await sb.from("payments").select("signature").eq("signature", signature).maybeSingle();
+    if (!existing?.signature) {
+      const { error: payErr } = await sb.from("payments").insert({
+        signature,
+        wallet: sessionData.wallet,
+        kind: "dev_fee",
+        amount_sol: deltaSol
+      });
+      if (payErr) return NextResponse.json({ error: payErr.message }, { status: 500 });
+    }
+
+    // Promote to dev
+    const { error: userErr } = await sb
+      .from("users")
+      .update({ role: "dev", dev_access_type: "paid" })
+      .eq("wallet", sessionData.wallet);
+
+    if (userErr) return NextResponse.json({ error: userErr.message }, { status: 500 });
+
+    return NextResponse.json({ ok: true });
+  } catch (e: any) {
+    console.error("confirm-dev-fee error:", e);
+    return NextResponse.json({ error: e?.message ?? "Internal error" }, { status: 500 });
+  }
+}
