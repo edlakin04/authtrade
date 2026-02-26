@@ -35,15 +35,18 @@ export default function GetStartedModal({
 
     setLoading("signin");
     try {
+      // 1) Get nonce + message
       const nonceRes = await fetch("/api/auth/nonce");
       if (!nonceRes.ok) {
         alert("Failed to start sign-in. Try again.");
         return;
       }
-
       const { message } = (await nonceRes.json()) as { message: string };
+
+      // 2) Sign message
       const signatureBytes = await signMessage(new TextEncoder().encode(message));
 
+      // 3) Verify on server (sets session cookie)
       const verifyRes = await fetch("/api/auth/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -59,6 +62,23 @@ export default function GetStartedModal({
         return;
       }
 
+      // 4) NEW: Refresh subscription from Supabase (sets sub cookie if active)
+      const refreshRes = await fetch("/api/subscription/refresh", { method: "POST" });
+
+      if (refreshRes.ok) {
+        const data = (await refreshRes.json().catch(() => null)) as
+          | { ok: true; active?: boolean }
+          | null;
+
+        if (data?.ok && data.active) {
+          // They’re already paid (from DB), go straight in
+          onClose();
+          router.push("/dashboard");
+          return;
+        }
+      }
+
+      // Not active → show subscribe step
       setStep("subscribe");
     } catch (e) {
       console.error("Sign-in error:", e);
@@ -95,10 +115,10 @@ export default function GetStartedModal({
       // Wallet signs + sends
       const sig = await sendTransaction(tx, connection);
 
-      // Do NOT confirm client-side (often flaky). Verify server-side with retries.
+      // Verify server-side with retries (DB write + cookie set happens there)
       let lastErr: any = null;
 
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 12; i++) {
         const confirmRes = await fetch("/api/payments/confirm-subscription", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
