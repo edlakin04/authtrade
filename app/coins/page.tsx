@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import TopNav from "@/components/TopNav";
+import Link from "next/link";
 
 export default function CoinsPage() {
   const [q, setQ] = useState("");
@@ -32,7 +33,9 @@ export default function CoinsPage() {
 
       <div className="mx-auto max-w-5xl px-6 py-10">
         <h1 className="text-2xl font-semibold">Coins</h1>
-        <p className="mt-1 text-sm text-zinc-400">All posted coins. Jupiter trading comes later.</p>
+        <p className="mt-1 text-sm text-zinc-400">
+          All posted coins. Click Buy/Sell to open Jupiter swap inside Authswap.
+        </p>
 
         <div className="mt-6 flex gap-3">
           <input
@@ -61,17 +64,22 @@ export default function CoinsPage() {
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                       <div className="text-sm font-semibold">{c.title ?? "Untitled coin"}</div>
-                      <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
-                      {c.description ? <div className="mt-2 text-xs text-zinc-300">{c.description}</div> : null}
+                      <div className="mt-1 break-all font-mono text-xs text-zinc-400">
+                        {c.token_address}
+                      </div>
+                      {c.description ? (
+                        <div className="mt-2 text-xs text-zinc-300">{c.description}</div>
+                      ) : null}
                       <div className="mt-2 text-xs text-zinc-500">Posted by {c.wallet}</div>
                     </div>
-                    <button
-                      disabled
-                      className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-400"
-                      title="Jupiter trading added later"
+
+                    <Link
+                      href={`/trade?outputMint=${encodeURIComponent(c.token_address)}`}
+                      className="shrink-0 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-black hover:bg-zinc-200"
+                      title="Open Jupiter swap"
                     >
-                      Buy/Sell (soon)
-                    </button>
+                      Buy / Sell
+                    </Link>
                   </div>
                 </div>
               ))
