@@ -12,13 +12,12 @@ import {
 
 export default function Providers({ children }: { children: React.ReactNode }) {
   const endpoint = useMemo(() => {
-    const rpc = process.env.NEXT_PUBLIC_SOLANA_RPC_URL;
-
-    // Do not silently fall back to public RPC.
-    // If missing, force a clearly broken URL so we catch it instantly.
-    if (!rpc || rpc.trim().length === 0) return "https://MISSING_NEXT_PUBLIC_SOLANA_RPC_URL.invalid";
-
-    return rpc;
+    // Always use same-origin proxy to avoid browser CORS issues with RPC providers.
+    if (typeof window !== "undefined") {
+      return `${window.location.origin}/api/rpc`;
+    }
+    // During SSR/build: any placeholder is fine; it won't be used to send tx.
+    return "http://localhost/api/rpc";
   }, []);
 
   const wallets = useMemo(
