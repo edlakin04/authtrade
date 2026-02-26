@@ -14,6 +14,8 @@ declare global {
   }
 }
 
+const WSOL_MINT = "So11111111111111111111111111111111111111112";
+
 export default function JupiterSwapWidget({
   inputMint,
   outputMint
@@ -23,21 +25,15 @@ export default function JupiterSwapWidget({
 }) {
   const wallet = useWallet();
 
-  const referralAccount = process.env.NEXT_PUBLIC_JUP_REFERRAL_ACCOUNT;
-  const referralFee = Number(process.env.NEXT_PUBLIC_JUP_REFERRAL_FEE_BPS || "0");
-
   const formProps = useMemo(() => {
     return {
       swapMode: "ExactInOrOut",
-      initialInputMint: inputMint || undefined,
-      initialOutputMint: outputMint || undefined,
-      referralAccount: referralAccount || undefined,
-      referralFee: Number.isFinite(referralFee) ? referralFee : 0
+      initialInputMint: inputMint || WSOL_MINT,
+      initialOutputMint: outputMint || undefined
     };
-  }, [inputMint, outputMint, referralAccount, referralFee]);
+  }, [inputMint, outputMint]);
 
   useEffect(() => {
-    // Wait until the plugin script has loaded
     if (!window.Jupiter) return;
 
     window.Jupiter.init({
@@ -46,18 +42,15 @@ export default function JupiterSwapWidget({
       enableWalletPassthrough: true,
       passthroughWalletContextState: wallet,
       onRequestConnectWallet: () => {
-        // Your wallet modal already handles connect; just trigger connect.
         wallet.connect?.();
       },
       formProps,
       containerClassName: "jup-wrap"
     });
 
-    // keep plugin synced if wallet state changes
     window.Jupiter.syncProps({ passthroughWalletContextState: wallet });
 
     return () => {
-      // avoid leaving it mounted weirdly between pages
       try {
         window.Jupiter?.close?.();
       } catch {}
@@ -67,14 +60,11 @@ export default function JupiterSwapWidget({
 
   return (
     <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-      <div className="mb-3 text-sm text-zinc-300">
-        Powered by Jupiter Plugin (embedded)
-      </div>
+      <div className="mb-3 text-sm text-zinc-300">Powered by Jupiter Plugin (embedded)</div>
 
       <div id="jupiter-plugin" className="min-h-[520px] w-full" />
 
       <style jsx global>{`
-        /* Small safety net for layout */
         .jup-wrap {
           width: 100%;
         }
