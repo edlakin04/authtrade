@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+  background: #000;
+}
+
+.bg-authswap {
+  background:
+    radial-gradient(900px circle at 10% 10%, rgba(168, 85, 247, 0.18), transparent 40%),
+    radial-gradient(900px circle at 90% 20%, rgba(34, 211, 238, 0.14), transparent 45%),
+    radial-gradient(900px circle at 40% 90%, rgba(16, 185, 129, 0.12), transparent 45%),
+    #000;
+}
+
+.text-gradient {
+  background: linear-gradient(90deg, #a855f7, #22d3ee, #10b981);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
