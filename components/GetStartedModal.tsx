@@ -25,7 +25,6 @@ export default function GetStartedModal({
   const [loading, setLoading] = useState<null | "signin" | "pay">(null);
   const [step, setStep] = useState<Step>("connect");
 
-  // If middleware redirected with ?subscribe=1, open modal on landing and jump to subscribe step after connect/signin
   const shouldPromptSubscribe = useMemo(() => params.get("subscribe") === "1", [params]);
 
   if (!open) return null;
@@ -37,8 +36,12 @@ export default function GetStartedModal({
     setLoading("signin");
     try {
       const nonceRes = await fetch("/api/auth/nonce");
-      const { message } = (await nonceRes.json()) as { message: string };
+      if (!nonceRes.ok) {
+        alert("Failed to start sign-in. Try again.");
+        return;
+      }
 
+      const { message } = (await nonceRes.json()) as { message: string };
       const signatureBytes = await signMessage(new TextEncoder().encode(message));
 
       const verifyRes = await fetch("/api/auth/verify", {
@@ -57,7 +60,8 @@ export default function GetStartedModal({
       }
 
       setStep("subscribe");
-    } catch {
+    } catch (e) {
+      console.error("Sign-in error:", e);
       alert("Sign-in failed. Try again.");
     } finally {
       setLoading(null);
@@ -71,10 +75,11 @@ export default function GetStartedModal({
     const treasury = process.env.NEXT_PUBLIC_TREASURY_WALLET;
     const priceSol = Number(process.env.NEXT_PUBLIC_SUB_PRICE_SOL ?? "0");
 
-    if (!treasury) return alert("Missing NEXT_PUBLIC_TREASURY_WALLET.");
+    if (!treasury) return alert("Missing NEXT_PUBLIC_TREASURY_WALLET (set in Vercel env).");
     if (!Number.isFinite(priceSol) || priceSol <= 0) return alert("Missing NEXT_PUBLIC_SUB_PRICE_SOL.");
 
     setLoading("pay");
+
     try {
       const toPubkey = new PublicKey(treasury);
       const lamports = Math.round(priceSol * 1_000_000_000);
@@ -87,33 +92,45 @@ export default function GetStartedModal({
         })
       );
 
+      // Wallet signs + sends
       const sig = await sendTransaction(tx, connection);
-      // confirm client-side too (helps UX)
-      await connection.confirmTransaction(sig, "confirmed");
 
-      // Ask server to verify and set subscription cookie
-      const confirmRes = await fetch("/api/payments/confirm-subscription", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ signature: sig })
-      });
+      // Do NOT confirm client-side (often flaky). Verify server-side with retries.
+      let lastErr: any = null;
 
-      if (!confirmRes.ok) {
-        const err = await confirmRes.json().catch(() => ({}));
-        alert(err?.error ?? "Payment verification failed.");
-        return;
+      for (let i = 0; i < 10; i++) {
+        const confirmRes = await fetch("/api/payments/confirm-subscription", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ signature: sig })
+        });
+
+        if (confirmRes.ok) {
+          onClose();
+          router.push("/dashboard");
+          return;
+        }
+
+        lastErr = await confirmRes.json().catch(() => ({}));
+        await new Promise((r) => setTimeout(r, 1200));
       }
 
-      onClose();
-      router.push("/dashboard");
-    } catch (e) {
-      alert("Payment failed or was cancelled.");
+      alert(
+        lastErr?.error ??
+          "Payment sent, but verification timed out. Wait 10 seconds and try again."
+      );
+    } catch (e: any) {
+      console.error("Subscription payment error:", e);
+      const msg =
+        e?.message ||
+        e?.toString?.() ||
+        "Payment failed (wallet rejected, RPC issue, or not enough SOL for fees).";
+      alert(msg);
     } finally {
       setLoading(null);
     }
   }
 
-  // Step logic: if connected, move to signin; if subscribed prompt, go to subscribe once signed in
   const connected = !!publicKey;
 
   return (
@@ -132,6 +149,7 @@ export default function GetStartedModal({
               {step === "subscribe" && "Pay the monthly fee in SOL to unlock Authswap."}
             </p>
           </div>
+
           <button
             onClick={onClose}
             className="rounded-lg px-2 py-1 text-zinc-400 hover:bg-white/5 hover:text-white"
@@ -149,11 +167,12 @@ export default function GetStartedModal({
           {connected && (
             <div className="rounded-xl border border-white/10 bg-white/5 p-3">
               <p className="text-xs text-zinc-400">Connected</p>
-              <p className="mt-1 break-all font-mono text-xs text-zinc-200">{publicKey!.toBase58()}</p>
+              <p className="mt-1 break-all font-mono text-xs text-zinc-200">
+                {publicKey!.toBase58()}
+              </p>
             </div>
           )}
 
-          {/* Step controls */}
           {!connected ? (
             <p className="text-xs text-zinc-400">
               Supported: Phantom, Solflare, Trust, Coinbase Wallet.
@@ -163,7 +182,6 @@ export default function GetStartedModal({
               className="w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
               disabled={loading === "signin"}
               onClick={async () => {
-                // If they came from protected route redirect, skip straight to sign in -> subscribe
                 setStep("signin");
                 await handleSignIn();
               }}
@@ -174,8 +192,11 @@ export default function GetStartedModal({
             <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3">
               <div className="flex items-center justify-between text-sm text-emerald-200">
                 <span>Monthly</span>
-                <span className="font-semibold">{process.env.NEXT_PUBLIC_SUB_PRICE_SOL ?? "—"} SOL</span>
+                <span className="font-semibold">
+                  {process.env.NEXT_PUBLIC_SUB_PRICE_SOL ?? "—"} SOL
+                </span>
               </div>
+
               <p className="mt-2 text-xs text-emerald-200/80">
                 You’ll sign a transaction sending SOL to Authswap. This unlocks access for 30 days.
               </p>
