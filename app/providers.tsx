@@ -3,37 +3,37 @@
 import React, { useMemo } from "react";
 import { ConnectionProvider, WalletProvider } from "@solana/wallet-adapter-react";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
+
 import {
   PhantomWalletAdapter,
   SolflareWalletAdapter,
   TrustWalletAdapter,
-  CoinbaseWalletAdapter
+  CoinbaseWalletAdapter,
+  GlowWalletAdapter
 } from "@solana/wallet-adapter-wallets";
 
+import "@solana/wallet-adapter-react-ui/styles.css";
+
 export default function Providers({ children }: { children: React.ReactNode }) {
-  const endpoint = useMemo(() => {
-    // Always use same-origin proxy to avoid browser CORS issues with RPC providers.
-    if (typeof window !== "undefined") {
-      return `${window.location.origin}/api/rpc`;
-    }
-    // During SSR/build: any placeholder is fine; it won't be used to send tx.
-    return "http://localhost/api/rpc";
-  }, []);
+  const endpoint = process.env.NEXT_PUBLIC_RPC_ENDPOINT!;
 
   const wallets = useMemo(
     () => [
       new PhantomWalletAdapter(),
       new SolflareWalletAdapter(),
       new TrustWalletAdapter(),
-      new CoinbaseWalletAdapter()
+      new CoinbaseWalletAdapter(),
+      new GlowWalletAdapter()
     ],
     []
   );
 
   return (
     <ConnectionProvider endpoint={endpoint}>
-      <WalletProvider wallets={wallets} autoConnect={false}>
-        <WalletModalProvider>{children}</WalletModalProvider>
+      <WalletProvider wallets={wallets} autoConnect>
+        <WalletModalProvider>
+          {children}
+        </WalletModalProvider>
       </WalletProvider>
     </ConnectionProvider>
   );
