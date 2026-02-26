@@ -29,7 +29,7 @@ export default function GetStartedModal({
 
   if (!open) return null;
 
-  async function handleSignIn() {
+  async function handleSignInThenRefreshContext() {
     if (!publicKey) return alert("Connect a wallet first.");
     if (!signMessage) return alert("This wallet does not support message signing.");
 
@@ -62,23 +62,25 @@ export default function GetStartedModal({
         return;
       }
 
-      // 4) NEW: Refresh subscription from Supabase (sets sub cookie if active)
-      const refreshRes = await fetch("/api/subscription/refresh", { method: "POST" });
-
-      if (refreshRes.ok) {
-        const data = (await refreshRes.json().catch(() => null)) as
-          | { ok: true; active?: boolean }
-          | null;
-
-        if (data?.ok && data.active) {
-          // They’re already paid (from DB), go straight in
-          onClose();
-          router.push("/dashboard");
-          return;
-        }
+      // 4) Refresh context (role + subscription) from Supabase
+      const ctxRes = await fetch("/api/context/refresh", { method: "POST" });
+      if (!ctxRes.ok) {
+        // If this fails, still allow them to proceed to subscribe step
+        setStep("subscribe");
+        return;
       }
 
-      // Not active → show subscribe step
+      const ctx = (await ctxRes.json().catch(() => null)) as
+        | { ok: true; role: "user" | "dev" | "admin"; subscribedActive: boolean }
+        | null;
+
+      if (ctx?.ok && (ctx.role === "dev" || ctx.role === "admin" || ctx.subscribedActive)) {
+        onClose();
+        router.push("/dashboard");
+        return;
+      }
+
+      // Not dev, not subscribed → show subscribe
       setStep("subscribe");
     } catch (e) {
       console.error("Sign-in error:", e);
@@ -104,7 +106,12 @@ export default function GetStartedModal({
       const toPubkey = new PublicKey(treasury);
       const lamports = Math.round(priceSol * 1_000_000_000);
 
-      const tx = new Transaction().add(
+      // Force fee payer + blockhash for consistency
+      const latest = await connection.getLatestBlockhash("confirmed");
+      const tx = new Transaction({
+        feePayer: publicKey,
+        recentBlockhash: latest.blockhash
+      }).add(
         SystemProgram.transfer({
           fromPubkey: publicKey,
           toPubkey,
@@ -112,10 +119,9 @@ export default function GetStartedModal({
         })
       );
 
-      // Wallet signs + sends
       const sig = await sendTransaction(tx, connection);
 
-      // Verify server-side with retries (DB write + cookie set happens there)
+      // Verify server-side with retries (writes to Supabase + sets cookie)
       let lastErr: any = null;
 
       for (let i = 0; i < 12; i++) {
@@ -135,10 +141,7 @@ export default function GetStartedModal({
         await new Promise((r) => setTimeout(r, 1200));
       }
 
-      alert(
-        lastErr?.error ??
-          "Payment sent, but verification timed out. Wait 10 seconds and try again."
-      );
+      alert(lastErr?.error ?? "Payment sent, but verification timed out. Try again in 10 seconds.");
     } catch (e: any) {
       console.error("Subscription payment error:", e);
       const msg =
@@ -203,7 +206,7 @@ export default function GetStartedModal({
               disabled={loading === "signin"}
               onClick={async () => {
                 setStep("signin");
-                await handleSignIn();
+                await handleSignInThenRefreshContext();
               }}
             >
               {loading === "signin" ? "Signing in..." : "Sign in"}
