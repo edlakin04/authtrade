@@ -1,8 +1,10 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import bs58 from "bs58";
+import { useRouter } from "next/navigation";
 
 export default function GetStartedModal({
   open,
@@ -11,9 +13,61 @@ export default function GetStartedModal({
   open: boolean;
   onClose: () => void;
 }) {
-  const { publicKey } = useWallet();
+  const router = useRouter();
+  const { publicKey, signMessage } = useWallet();
+
+  const [loading, setLoading] = useState(false);
 
   if (!open) return null;
+
+  async function handleSignIn() {
+    if (!publicKey) {
+      alert("Connect a wallet first.");
+      return;
+    }
+    if (!signMessage) {
+      alert("This wallet does not support message signing.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // 1) Get nonce + message from server
+      const nonceRes = await fetch("/api/auth/nonce", { method: "GET" });
+      if (!nonceRes.ok) {
+        alert("Failed to start sign-in. Try again.");
+        return;
+      }
+      const { message } = (await nonceRes.json()) as { message: string };
+
+      // 2) Ask wallet to sign the message bytes
+      const messageBytes = new TextEncoder().encode(message);
+      const signatureBytes = await signMessage(messageBytes);
+
+      // 3) Send signature to server to verify & set session cookie
+      const verifyRes = await fetch("/api/auth/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          publicKey: publicKey.toBase58(),
+          signature: bs58.encode(signatureBytes)
+        })
+      });
+
+      if (!verifyRes.ok) {
+        const err = await verifyRes.json().catch(() => ({}));
+        alert(err?.error ?? "Sign-in failed.");
+        return;
+      }
+
+      onClose();
+      router.push("/dashboard");
+    } catch (e) {
+      alert("Sign-in failed. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
@@ -22,7 +76,7 @@ export default function GetStartedModal({
           <div>
             <h2 className="text-xl font-semibold text-white">Connect wallet</h2>
             <p className="mt-1 text-sm text-zinc-300">
-              Connect your Solana wallet to continue. Subscription comes next.
+              Connect your Solana wallet, then sign in to continue. This does not approve any transactions.
             </p>
           </div>
           <button
@@ -44,19 +98,22 @@ export default function GetStartedModal({
               <p className="text-sm text-emerald-200">
                 Connected: <span className="font-mono">{publicKey.toBase58()}</span>
               </p>
+
               <button
-                className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200"
-                onClick={onClose}
+                className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={loading}
+                onClick={handleSignIn}
               >
-                Continue
+                {loading ? "Signing in..." : "Sign in"}
               </button>
+
               <p className="mt-2 text-xs text-emerald-200/80">
-                Next step: sign-in + subscription payment (we’ll add this in Chunk 2/3).
+                Next: we’ll add subscription payment + access gating.
               </p>
             </div>
           ) : (
             <p className="text-xs text-zinc-400">
-              Supported: Phantom, Solflare, Trust, Coinbase Wallet, Backpack.
+              Supported: Phantom, Solflare, Trust, Coinbase Wallet.
             </p>
           )}
         </div>
