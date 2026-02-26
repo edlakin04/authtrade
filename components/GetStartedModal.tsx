@@ -2,7 +2,7 @@
 
 import React, { useMemo, useState } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import bs58 from "bs58";
 import { useRouter, useSearchParams } from "next/navigation";
 import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
@@ -21,6 +21,7 @@ export default function GetStartedModal({
 
   const { connection } = useConnection();
   const { publicKey, signMessage, sendTransaction } = useWallet();
+  const { setVisible } = useWalletModal();
 
   const [loading, setLoading] = useState<null | "signin" | "pay">(null);
   const [step, setStep] = useState<Step>("connect");
@@ -65,7 +66,6 @@ export default function GetStartedModal({
       // 4) Refresh context (role + subscription) from Supabase
       const ctxRes = await fetch("/api/context/refresh", { method: "POST" });
       if (!ctxRes.ok) {
-        // If this fails, still allow them to proceed to subscribe step
         setStep("subscribe");
         return;
       }
@@ -80,7 +80,6 @@ export default function GetStartedModal({
         return;
       }
 
-      // Not dev, not subscribed → show subscribe
       setStep("subscribe");
     } catch (e) {
       console.error("Sign-in error:", e);
@@ -106,7 +105,6 @@ export default function GetStartedModal({
       const toPubkey = new PublicKey(treasury);
       const lamports = Math.round(priceSol * 1_000_000_000);
 
-      // Force fee payer + blockhash for consistency
       const latest = await connection.getLatestBlockhash("confirmed");
       const tx = new Transaction({
         feePayer: publicKey,
@@ -121,9 +119,7 @@ export default function GetStartedModal({
 
       const sig = await sendTransaction(tx, connection);
 
-      // Verify server-side with retries (writes to Supabase + sets cookie)
       let lastErr: any = null;
-
       for (let i = 0; i < 12; i++) {
         const confirmRes = await fetch("/api/payments/confirm-subscription", {
           method: "POST",
@@ -144,11 +140,11 @@ export default function GetStartedModal({
       alert(lastErr?.error ?? "Payment sent, but verification timed out. Try again in 10 seconds.");
     } catch (e: any) {
       console.error("Subscription payment error:", e);
-      const msg =
+      alert(
         e?.message ||
-        e?.toString?.() ||
-        "Payment failed (wallet rejected, RPC issue, or not enough SOL for fees).";
-      alert(msg);
+          e?.toString?.() ||
+          "Payment failed (wallet rejected, RPC issue, or not enough SOL for fees)."
+      );
     } finally {
       setLoading(null);
     }
@@ -157,7 +153,7 @@ export default function GetStartedModal({
   const connected = !!publicKey;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 p-4 pointer-events-auto">
       <div className="w-full max-w-md rounded-2xl border border-white/10 bg-zinc-950 p-6 shadow-2xl">
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -183,8 +179,14 @@ export default function GetStartedModal({
         </div>
 
         <div className="mt-5 flex flex-col gap-3">
+          {/* CONNECT BUTTON (replaces WalletMultiButton) */}
           <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-            <WalletMultiButton className="!w-full !justify-center" />
+            <button
+              onClick={() => setVisible(true)}
+              className="w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200"
+            >
+              {connected ? "Switch wallet" : "Connect wallet"}
+            </button>
           </div>
 
           {connected && (
