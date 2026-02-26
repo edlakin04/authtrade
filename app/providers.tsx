@@ -9,10 +9,17 @@ import {
   TrustWalletAdapter,
   CoinbaseWalletAdapter
 } from "@solana/wallet-adapter-wallets";
-import { clusterApiUrl } from "@solana/web3.js";
 
 export default function Providers({ children }: { children: React.ReactNode }) {
-  const endpoint = useMemo(() => clusterApiUrl("mainnet-beta"), []);
+  const endpoint = useMemo(() => {
+    const rpc = process.env.NEXT_PUBLIC_SOLANA_RPC_URL;
+
+    // Do not silently fall back to public RPC.
+    // If missing, force a clearly broken URL so we catch it instantly.
+    if (!rpc || rpc.trim().length === 0) return "https://MISSING_NEXT_PUBLIC_SOLANA_RPC_URL.invalid";
+
+    return rpc;
+  }, []);
 
   const wallets = useMemo(
     () => [
