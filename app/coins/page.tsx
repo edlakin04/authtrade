@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import TopNav from "@/components/TopNav";
 
 export default function CoinsPage() {
   const [q, setQ] = useState("");
@@ -27,9 +28,11 @@ export default function CoinsPage() {
 
   return (
     <main className="min-h-screen bg-authswap text-white">
+      <TopNav />
+
       <div className="mx-auto max-w-5xl px-6 py-10">
         <h1 className="text-2xl font-semibold">Coins</h1>
-        <p className="mt-1 text-sm text-zinc-400">All posted coins. Buying/selling comes later via Jupiter UI.</p>
+        <p className="mt-1 text-sm text-zinc-400">All posted coins. Jupiter trading comes later.</p>
 
         <div className="mt-6 flex gap-3">
           <input
