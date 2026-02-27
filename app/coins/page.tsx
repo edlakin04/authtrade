@@ -20,8 +20,8 @@ type CoinRow = {
 type CommentRow = {
   id: string;
   coin_id: string;
-  commenter_wallet: string;
-  content: string;
+  author_wallet: string;
+  comment: string;
   created_at: string;
 };
 
@@ -113,6 +113,7 @@ export default function CoinsPage() {
       const json = await res.json().catch(() => null);
       if (!res.ok) throw new Error(json?.error || "Failed to load comments");
 
+      // API returns: author_wallet + comment
       setComments((json.comments ?? []) as CommentRow[]);
     } catch (e: any) {
       alert(e?.message ?? "Failed to load comments");
@@ -128,13 +129,14 @@ export default function CoinsPage() {
       return;
     }
 
-    const content = commentText.trim();
-    if (content.length < 2) return alert("Comment too short");
+    const comment = commentText.trim();
+    if (comment.length < 2) return alert("Comment too short");
 
     const res = await fetch(`/api/coins/${encodeURIComponent(openCoin.id)}/comments`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content })
+      // Send { comment } to match Supabase schema (route also accepts content, but this is cleaner)
+      body: JSON.stringify({ comment })
     });
 
     const json = await res.json().catch(() => ({}));
@@ -313,10 +315,13 @@ export default function CoinsPage() {
                   {comments.map((cm) => (
                     <div key={cm.id} className="rounded-xl border border-white/10 bg-black/30 p-3">
                       <div className="flex items-center justify-between gap-3 text-xs text-zinc-500">
-                        <span className="font-mono">{shortAddr(cm.commenter_wallet)}</span>
+                        <span className="font-mono">{shortAddr(cm.author_wallet)}</span>
                         <span>{new Date(cm.created_at).toLocaleString()}</span>
                       </div>
-                      <div className="mt-2 text-sm text-zinc-200">{cm.content}</div>
+
+                      <div className="mt-2 whitespace-pre-wrap break-words text-sm text-zinc-200">
+                        {cm.comment}
+                      </div>
                     </div>
                   ))}
                 </div>
