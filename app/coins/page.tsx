@@ -329,9 +329,7 @@ export default function CoinsPage() {
                         <span>{new Date(cm.created_at).toLocaleString()}</span>
                       </div>
 
-                      <div className="mt-2 whitespace-pre-wrap break-words text-sm text-zinc-200">
-                        {cm.comment}
-                      </div>
+                      <div className="mt-2 whitespace-pre-wrap break-words text-sm text-zinc-200">{cm.comment}</div>
                     </div>
                   ))}
                 </div>
