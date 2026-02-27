@@ -9,6 +9,43 @@ function supabaseAdmin() {
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
+function pickExpiry(row: any): string | null {
+  if (!row) return null;
+
+  const candidates = [
+    "expires_at",
+    "expiresAt",
+    "expiry_at",
+    "expiryAt",
+    "expiry",
+    "expires",
+    "paid_until",
+    "paidUntil",
+    "valid_until",
+    "validUntil",
+    "ends_at",
+    "endsAt",
+    "end_at",
+    "endAt",
+    "until"
+  ];
+
+  for (const key of candidates) {
+    const v = row[key];
+    if (typeof v === "string" && v.length > 5) return v;
+  }
+  return null;
+}
+
+function pickAutoRenewKey(row: any): string | null {
+  if (!row) return null;
+  const candidates = ["auto_renew", "autoRenew", "renew", "is_auto_renew", "isAutoRenew"];
+  for (const key of candidates) {
+    if (typeof row[key] === "boolean") return key;
+  }
+  return null;
+}
+
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
@@ -17,21 +54,15 @@ export async function GET(req: Request) {
 
     const sb = supabaseAdmin();
 
-    // ✅ EDIT THIS if your table/columns differ
-    // Expected columns:
-    // - wallet (text)
-    // - expires_at (timestamptz)
-    // - auto_renew (bool)
-    const { data, error } = await sb
-      .from("subscriptions")
-      .select("wallet, expires_at, auto_renew")
-      .eq("wallet", wallet)
-      .maybeSingle();
+    // ✅ do not hardcode column names
+    const { data, error } = await sb.from("subscriptions").select("*").eq("wallet", wallet).maybeSingle();
 
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
 
-    const expiresAt = data?.expires_at ?? null;
-    const autoRenew = typeof data?.auto_renew === "boolean" ? data.auto_renew : null;
+    const expiresAt = pickExpiry(data);
+    const hasEverSubscribed = !!data; // row exists means they’ve subscribed before (or at least a record exists)
+    const autoRenewKey = pickAutoRenewKey(data);
+    const autoRenew = autoRenewKey ? (data as any)[autoRenewKey] : null;
 
     const subscribedActive =
       !!expiresAt && new Date(expiresAt).getTime() > Date.now();
@@ -40,8 +71,9 @@ export async function GET(req: Request) {
       ok: true,
       wallet,
       subscribedActive,
-      expiresAt,
-      autoRenew
+      expiresAt: expiresAt ?? null,
+      autoRenew,
+      hasEverSubscribed
     });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
