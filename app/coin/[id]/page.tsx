@@ -50,10 +50,8 @@ function fmtUsd(n: number | null | undefined) {
 }
 
 /**
- * Stage A fix:
- * - Microcaps often have prices like 0.000001
- * - Showing 2 decimals makes it look like 0.00
- * This picks decimals based on size and trims trailing zeros.
+ * Micro-price formatting:
+ * - prevents 0.00 for tiny coins
  */
 function fmtPriceUsd(n: number | null | undefined) {
   if (n == null || !Number.isFinite(n)) return "—";
@@ -67,8 +65,11 @@ function fmtPriceUsd(n: number | null | undefined) {
   else if (abs >= 0.0001) decimals = 6;
   else decimals = 10;
 
-  // toFixed then trim trailing zeros
-  const s = n.toFixed(decimals).replace(/(\.\d*?[1-9])0+$/g, "$1").replace(/\.0+$/g, "");
+  const s = n
+    .toFixed(decimals)
+    .replace(/(\.\d*?[1-9])0+$/g, "$1")
+    .replace(/\.0+$/g, "");
+
   return `$${s}`;
 }
 
@@ -77,20 +78,12 @@ function normalizeImageUrl(url: string | null | undefined) {
   const u = url.trim();
   if (!u) return null;
 
-  // common cases
-  if (u.startsWith("ipfs://")) {
-    // ipfs://CID/path -> https://ipfs.io/ipfs/CID/path
-    return `https://ipfs.io/ipfs/${u.replace("ipfs://", "")}`;
-  }
-  if (u.startsWith("ar://")) {
-    // ar://TX -> https://arweave.net/TX
-    return `https://arweave.net/${u.replace("ar://", "")}`;
-  }
+  if (u.startsWith("ipfs://")) return `https://ipfs.io/ipfs/${u.replace("ipfs://", "")}`;
+  if (u.startsWith("ar://")) return `https://arweave.net/${u.replace("ar://", "")}`;
 
-  // already http(s)
   if (u.startsWith("http://") || u.startsWith("https://")) return u;
 
-  // sometimes tokens store just CID-ish strings; best-effort:
+  // best-effort: sometimes a raw CID is stored
   if (/^[a-zA-Z0-9]{40,}$/.test(u)) return `https://ipfs.io/ipfs/${u}`;
 
   return u;
@@ -104,8 +97,8 @@ function initials(name?: string | null, symbol?: string | null) {
   return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
-export default function CoinPage({ params }: { params: { id: string } }) {
-  const coinId = params.id;
+export default function CoinPage({ params }: { params: Promise<{ id: string }> }) {
+  const [coinId, setCoinId] = useState<string>("");
 
   const [viewerWallet, setViewerWallet] = useState<string | null>(null);
 
@@ -117,6 +110,23 @@ export default function CoinPage({ params }: { params: { id: string } }) {
   const [liveErr, setLiveErr] = useState<string | null>(null);
   const [liveLoading, setLiveLoading] = useState(false);
 
+  // resolve params (your project expects params as Promise)
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const p = await params;
+        if (!alive) return;
+        setCoinId(p.id);
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [params]);
+
   const mint = useMemo(() => coin?.token_address ?? "", [coin?.token_address]);
 
   // Logo handling
@@ -124,7 +134,6 @@ export default function CoinPage({ params }: { params: { id: string } }) {
   const [logoFailed, setLogoFailed] = useState(false);
 
   useEffect(() => {
-    // reset logo error when token changes
     setLogoFailed(false);
   }, [logoUrl]);
 
@@ -161,7 +170,7 @@ export default function CoinPage({ params }: { params: { id: string } }) {
     }
   }
 
-  // initial load (db coin)
+  // initial load
   useEffect(() => {
     if (!coinId) return;
     loadCoin(coinId);
@@ -296,7 +305,6 @@ export default function CoinPage({ params }: { params: { id: string } }) {
             <div className="mt-6 grid gap-4 md:grid-cols-4">
               <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
                 <p className="text-xs text-zinc-400">Price</p>
-                {/* Stage A fix: adaptive decimals */}
                 <p className="mt-2 text-lg font-semibold">{fmtPriceUsd(live?.priceUsd ?? null)}</p>
               </div>
 
@@ -324,7 +332,6 @@ export default function CoinPage({ params }: { params: { id: string } }) {
               {live?.note ? <div className="mt-1">{live.note}</div> : null}
             </div>
 
-            {/* Keeping your existing community box for now (Stage A doesn't change it) */}
             <div className="mt-8 rounded-2xl border border-white/10 bg-white/5 p-5">
               <h2 className="text-lg font-semibold">Community</h2>
               <p className="mt-1 text-sm text-zinc-400">
