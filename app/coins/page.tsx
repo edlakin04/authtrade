@@ -135,7 +135,7 @@ export default function CoinsPage() {
     const res = await fetch(`/api/coins/${encodeURIComponent(openCoin.id)}/comments`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // Send { comment } to match Supabase schema (route also accepts content, but this is cleaner)
+      // matches your Supabase schema
       body: JSON.stringify({ comment })
     });
 
@@ -143,8 +143,8 @@ export default function CoinsPage() {
     if (!res.ok) return alert(json?.error ?? "Comment failed");
 
     setCommentText("");
-    // refresh comments + bump comment count
     await openComments(openCoin);
+
     setCoins((prev) =>
       prev.map((x) => (x.id === openCoin.id ? { ...x, comments_count: x.comments_count + 1 } : x))
     );
@@ -168,6 +168,7 @@ export default function CoinsPage() {
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
+
             <button
               onClick={() => setSort("trending")}
               className={[
@@ -179,6 +180,7 @@ export default function CoinsPage() {
             >
               Trending
             </button>
+
             <button
               onClick={() => setSort("newest")}
               className={[
@@ -214,6 +216,7 @@ export default function CoinsPage() {
                     <div className="min-w-0">
                       <div className="text-lg font-semibold">{c.title ?? "Untitled coin"}</div>
                       <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
+
                       {c.description ? (
                         <div className="mt-2 text-sm text-zinc-300">{c.description}</div>
                       ) : (
@@ -224,6 +227,12 @@ export default function CoinsPage() {
                         <span>Dev: {shortAddr(c.dev_wallet)}</span>
                         <span>•</span>
                         <span>{new Date(c.created_at).toLocaleString()}</span>
+
+                        <span>•</span>
+                        <Link href={`/coin/${encodeURIComponent(c.id)}`} className="text-zinc-200 hover:text-white">
+                          View coin →
+                        </Link>
+
                         <span>•</span>
                         <Link
                           href={`/dev/${encodeURIComponent(c.dev_wallet)}`}
@@ -296,6 +305,7 @@ export default function CoinsPage() {
                 onChange={(e) => setCommentText(e.target.value)}
                 disabled={!viewerWallet}
               />
+
               <button
                 onClick={postComment}
                 disabled={!viewerWallet || commentText.trim().length < 2}
