@@ -8,6 +8,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 
 type Step = "connect" | "signin" | "subscribe";
+type SubscribeReason = "new" | "expired";
 
 export default function GetStartedModal({
   open,
@@ -25,6 +26,10 @@ export default function GetStartedModal({
   const [loading, setLoading] = useState<null | "signin" | "pay">(null);
   const [step, setStep] = useState<Step>("connect");
 
+  // ✅ new vs expired messaging
+  const [subscribeReason, setSubscribeReason] = useState<SubscribeReason>("new");
+  const [expiredAt, setExpiredAt] = useState<string | null>(null);
+
   const shouldPromptSubscribe = useMemo(() => params.get("subscribe") === "1", [params]);
 
   if (!open) return null;
@@ -34,6 +39,7 @@ export default function GetStartedModal({
     if (!signMessage) return alert("This wallet does not support message signing.");
 
     setLoading("signin");
+
     try {
       // 1) Get nonce + message
       const nonceRes = await fetch("/api/auth/nonce");
@@ -62,10 +68,13 @@ export default function GetStartedModal({
         return;
       }
 
-      // 4) Refresh context (role + subscription) from Supabase
+      // 4) Refresh context (role + subscription) from your server
       const ctxRes = await fetch("/api/context/refresh", { method: "POST" });
+
+      // If ctx refresh fails, still allow subscribe step
       if (!ctxRes.ok) {
-        // If this fails, still allow them to proceed to subscribe step
+        setSubscribeReason("new");
+        setExpiredAt(null);
         setStep("subscribe");
         return;
       }
@@ -74,13 +83,47 @@ export default function GetStartedModal({
         | { ok: true; role: "user" | "dev" | "admin"; subscribedActive: boolean }
         | null;
 
+      // If dev/admin or already subscribed → go dashboard
       if (ctx?.ok && (ctx.role === "dev" || ctx.role === "admin" || ctx.subscribedActive)) {
         onClose();
         router.push("/dashboard");
         return;
       }
 
-      // Not dev, not subscribed → show subscribe
+      // ✅ Not subscribed: decide "new" vs "expired" by checking subscription history
+      // This avoids editing your context route + avoids hard-coded column names.
+      const statusRes = await fetch(
+        `/api/subscription/status?wallet=${encodeURIComponent(publicKey.toBase58())}`,
+        { cache: "no-store" }
+      );
+
+      if (statusRes.ok) {
+        const status = (await statusRes.json().catch(() => null)) as
+          | {
+              ok: true;
+              subscribedActive: boolean;
+              expiresAt: string | null;
+              hasEverSubscribed: boolean;
+            }
+          | null;
+
+        if (status?.ok) {
+          if (!status.subscribedActive && status.hasEverSubscribed && status.expiresAt) {
+            setSubscribeReason("expired");
+            setExpiredAt(status.expiresAt);
+          } else {
+            setSubscribeReason("new");
+            setExpiredAt(null);
+          }
+        } else {
+          setSubscribeReason("new");
+          setExpiredAt(null);
+        }
+      } else {
+        setSubscribeReason("new");
+        setExpiredAt(null);
+      }
+
       setStep("subscribe");
     } catch (e) {
       console.error("Sign-in error:", e);
@@ -106,7 +149,6 @@ export default function GetStartedModal({
       const toPubkey = new PublicKey(treasury);
       const lamports = Math.round(priceSol * 1_000_000_000);
 
-      // Force fee payer + blockhash for consistency
       const latest = await connection.getLatestBlockhash("confirmed");
       const tx = new Transaction({
         feePayer: publicKey,
@@ -121,7 +163,7 @@ export default function GetStartedModal({
 
       const sig = await sendTransaction(tx, connection);
 
-      // Verify server-side with retries (writes to Supabase + sets cookie)
+      // Verify server-side with retries (writes to Supabase + updates access)
       let lastErr: any = null;
 
       for (let i = 0; i < 12; i++) {
@@ -156,6 +198,17 @@ export default function GetStartedModal({
 
   const connected = !!publicKey;
 
+  const subscribeTitle =
+    subscribeReason === "expired" ? "Subscription expired" : "Start subscription";
+
+  const subscribeDesc =
+    subscribeReason === "expired"
+      ? "Your 30 days are up. Renew now to regain access."
+      : "Pay the monthly fee in SOL to unlock Authswap.";
+
+  const subscribeBtn =
+    subscribeReason === "expired" ? "Renew subscription" : "Start subscription";
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
       <div className="w-full max-w-md rounded-2xl border border-white/10 bg-zinc-950 p-6 shadow-2xl">
@@ -164,12 +217,12 @@ export default function GetStartedModal({
             <h2 className="text-xl font-semibold text-white">
               {step === "connect" && "Connect wallet"}
               {step === "signin" && "Sign in"}
-              {step === "subscribe" && "Start subscription"}
+              {step === "subscribe" && subscribeTitle}
             </h2>
             <p className="mt-1 text-sm text-zinc-300">
               {step === "connect" && "Connect your Solana wallet to continue."}
               {step === "signin" && "Sign a message to prove wallet ownership. No transactions."}
-              {step === "subscribe" && "Pay the monthly fee in SOL to unlock Authswap."}
+              {step === "subscribe" && subscribeDesc}
             </p>
           </div>
 
@@ -220,6 +273,12 @@ export default function GetStartedModal({
                 </span>
               </div>
 
+              {subscribeReason === "expired" && expiredAt && (
+                <p className="mt-2 text-xs text-emerald-200/80">
+                  Expired on: {new Date(expiredAt).toLocaleString()}
+                </p>
+              )}
+
               <p className="mt-2 text-xs text-emerald-200/80">
                 You’ll sign a transaction sending SOL to Authswap. This unlocks access for 30 days.
               </p>
@@ -229,7 +288,7 @@ export default function GetStartedModal({
                 disabled={loading === "pay"}
                 onClick={handleStartSubscription}
               >
-                {loading === "pay" ? "Processing..." : "Start subscription"}
+                {loading === "pay" ? "Processing..." : subscribeBtn}
               </button>
             </div>
           )}
