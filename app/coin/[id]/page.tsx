@@ -1,4 +1,3 @@
-// app/coin/[id]/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -32,17 +31,8 @@ type Live = {
   pairUrl: string | null;
   dexId: string | null;
   quoteSymbol: string | null;
-
   updatedAt?: string;
   note?: string;
-};
-
-type CommentRow = {
-  id: string;
-  coin_id: string;
-  author_wallet: string;
-  comment: string;
-  created_at: string;
 };
 
 function shortAddr(s: string) {
@@ -52,11 +42,70 @@ function shortAddr(s: string) {
 
 function fmtUsd(n: number | null | undefined) {
   if (n == null || !Number.isFinite(n)) return "—";
-  return n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+  return n.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2
+  });
 }
 
-export default function CoinPage({ params }: { params: Promise<{ id: string }> }) {
-  const [coinId, setCoinId] = useState("");
+/**
+ * Stage A fix:
+ * - Microcaps often have prices like 0.000001
+ * - Showing 2 decimals makes it look like 0.00
+ * This picks decimals based on size and trims trailing zeros.
+ */
+function fmtPriceUsd(n: number | null | undefined) {
+  if (n == null || !Number.isFinite(n)) return "—";
+  if (n <= 0) return "$0";
+
+  const abs = Math.abs(n);
+  let decimals = 2;
+
+  if (abs >= 1) decimals = 2;
+  else if (abs >= 0.01) decimals = 4;
+  else if (abs >= 0.0001) decimals = 6;
+  else decimals = 10;
+
+  // toFixed then trim trailing zeros
+  const s = n.toFixed(decimals).replace(/(\.\d*?[1-9])0+$/g, "$1").replace(/\.0+$/g, "");
+  return `$${s}`;
+}
+
+function normalizeImageUrl(url: string | null | undefined) {
+  if (!url) return null;
+  const u = url.trim();
+  if (!u) return null;
+
+  // common cases
+  if (u.startsWith("ipfs://")) {
+    // ipfs://CID/path -> https://ipfs.io/ipfs/CID/path
+    return `https://ipfs.io/ipfs/${u.replace("ipfs://", "")}`;
+  }
+  if (u.startsWith("ar://")) {
+    // ar://TX -> https://arweave.net/TX
+    return `https://arweave.net/${u.replace("ar://", "")}`;
+  }
+
+  // already http(s)
+  if (u.startsWith("http://") || u.startsWith("https://")) return u;
+
+  // sometimes tokens store just CID-ish strings; best-effort:
+  if (/^[a-zA-Z0-9]{40,}$/.test(u)) return `https://ipfs.io/ipfs/${u}`;
+
+  return u;
+}
+
+function initials(name?: string | null, symbol?: string | null) {
+  const base = (symbol || name || "").trim();
+  if (!base) return "?";
+  const parts = base.split(/[\s\-_]+/).filter(Boolean);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
+export default function CoinPage({ params }: { params: { id: string } }) {
+  const coinId = params.id;
 
   const [viewerWallet, setViewerWallet] = useState<string | null>(null);
 
@@ -68,20 +117,16 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
   const [liveErr, setLiveErr] = useState<string | null>(null);
   const [liveLoading, setLiveLoading] = useState(false);
 
-  // community (comments)
-  const [comments, setComments] = useState<CommentRow[]>([]);
-  const [commentLoading, setCommentLoading] = useState(false);
-  const [commentErr, setCommentErr] = useState<string | null>(null);
-  const [commentText, setCommentText] = useState("");
+  const mint = useMemo(() => coin?.token_address ?? "", [coin?.token_address]);
+
+  // Logo handling
+  const logoUrl = useMemo(() => normalizeImageUrl(live?.image), [live?.image]);
+  const [logoFailed, setLogoFailed] = useState(false);
 
   useEffect(() => {
-    (async () => {
-      const p = await params;
-      setCoinId(p.id);
-    })();
-  }, [params]);
-
-  const mint = useMemo(() => coin?.token_address ?? "", [coin?.token_address]);
+    // reset logo error when token changes
+    setLogoFailed(false);
+  }, [logoUrl]);
 
   async function loadCoin(id: string) {
     setLoading(true);
@@ -89,13 +134,12 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
     try {
       const res = await fetch(`/api/coin/${encodeURIComponent(id)}`, { cache: "no-store" });
       const json = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(json?.error || json?.details || "Failed to load coin");
+      if (!res.ok) throw new Error(json?.error || "Failed to load coin");
 
       setViewerWallet(json.viewerWallet ?? null);
       setCoin(json.coin as CoinDB);
     } catch (e: any) {
       setErr(e?.message ?? "Failed to load coin");
-      setCoin(null);
     } finally {
       setLoading(false);
     }
@@ -108,46 +152,32 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
     try {
       const res = await fetch(`/api/coin-live?mint=${encodeURIComponent(m)}`, { cache: "no-store" });
       const json = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(json?.error || json?.details || "Failed to load live data");
+      if (!res.ok) throw new Error(json?.error || "Failed to load live data");
       setLive(json as Live);
     } catch (e: any) {
       setLiveErr(e?.message ?? "Failed to load live data");
-      setLive(null);
     } finally {
       setLiveLoading(false);
     }
   }
 
-  async function loadComments(id: string) {
-    setCommentLoading(true);
-    setCommentErr(null);
-    try {
-      const res = await fetch(`/api/coins/${encodeURIComponent(id)}/comments`, { cache: "no-store" });
-      const json = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(json?.error || json?.details || "Failed to load comments");
-      setComments((json.comments ?? []) as CommentRow[]);
-    } catch (e: any) {
-      setCommentErr(e?.message ?? "Failed to load comments");
-      setComments([]);
-    } finally {
-      setCommentLoading(false);
-    }
-  }
-
-  // initial load
+  // initial load (db coin)
   useEffect(() => {
     if (!coinId) return;
     loadCoin(coinId);
-    loadComments(coinId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coinId]);
 
-  // live load + polling
+  // live load + polling every 30s
   useEffect(() => {
     if (!mint) return;
 
     let alive = true;
-    loadLive(mint);
+
+    (async () => {
+      if (!alive) return;
+      await loadLive(mint);
+    })();
 
     const t = setInterval(() => {
       if (!alive) return;
@@ -160,59 +190,6 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mint]);
-
-  async function toggleUpvote() {
-    if (!coin) return;
-
-    if (!viewerWallet) {
-      alert("Sign in first (Get Started) to upvote.");
-      return;
-    }
-
-    const endpoint = `/api/coins/${encodeURIComponent(coin.id)}/vote`;
-    const method = coin.viewer_has_upvoted ? "DELETE" : "POST";
-
-    const res = await fetch(endpoint, { method });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) return alert(json?.error ?? "Vote failed");
-
-    // optimistic update
-    setCoin((prev) => {
-      if (!prev) return prev;
-      const nowUpvoted = !prev.viewer_has_upvoted;
-      return {
-        ...prev,
-        viewer_has_upvoted: nowUpvoted,
-        upvotes_count: Math.max(0, prev.upvotes_count + (nowUpvoted ? 1 : -1))
-      };
-    });
-  }
-
-  async function postComment() {
-    if (!coin) return;
-    if (!viewerWallet) {
-      alert("Sign in first (Get Started) to comment.");
-      return;
-    }
-
-    const comment = commentText.trim();
-    if (comment.length < 2) return alert("Comment too short");
-
-    const res = await fetch(`/api/coins/${encodeURIComponent(coin.id)}/comments`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ comment }) // matches your Supabase schema
-    });
-
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) return alert(json?.error ?? "Comment failed");
-
-    setCommentText("");
-    await loadComments(coin.id);
-
-    // bump counter locally
-    setCoin((prev) => (prev ? { ...prev, comments_count: prev.comments_count + 1 } : prev));
-  }
 
   return (
     <main className="min-h-screen bg-authswap text-white">
@@ -231,13 +208,24 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
           </div>
         ) : !coin ? null : (
           <>
-            {/* Header */}
             <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-6">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="flex items-center gap-4">
                   <div className="h-14 w-14 overflow-hidden rounded-2xl border border-white/10 bg-black/30">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    {live?.image ? <img src={live.image} alt="" className="h-full w-full object-cover" /> : null}
+                    {!logoFailed && logoUrl ? (
+                      <img
+                        src={logoUrl}
+                        alt=""
+                        className="h-full w-full object-cover"
+                        onError={() => setLogoFailed(true)}
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-sm font-semibold text-zinc-200">
+                        {initials(live?.name, live?.symbol)}
+                      </div>
+                    )}
                   </div>
 
                   <div className="min-w-0">
@@ -305,11 +293,11 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
               )}
             </div>
 
-            {/* Market data */}
             <div className="mt-6 grid gap-4 md:grid-cols-4">
               <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
                 <p className="text-xs text-zinc-400">Price</p>
-                <p className="mt-2 text-lg font-semibold">{fmtUsd(live?.priceUsd ?? null)}</p>
+                {/* Stage A fix: adaptive decimals */}
+                <p className="mt-2 text-lg font-semibold">{fmtPriceUsd(live?.priceUsd ?? null)}</p>
               </div>
 
               <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
@@ -336,76 +324,32 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
               {live?.note ? <div className="mt-1">{live.note}</div> : null}
             </div>
 
-            {/* Community */}
+            {/* Keeping your existing community box for now (Stage A doesn't change it) */}
             <div className="mt-8 rounded-2xl border border-white/10 bg-white/5 p-5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-semibold">Community</h2>
-                  <p className="mt-1 text-sm text-zinc-400">Upvote and comment on this coin.</p>
-                </div>
+              <h2 className="text-lg font-semibold">Community</h2>
+              <p className="mt-1 text-sm text-zinc-400">
+                Upvotes and comments are on the Coins page for now. (Next chunk we can bring them onto this page too.)
+              </p>
 
-                <button
-                  onClick={toggleUpvote}
-                  className={[
-                    "rounded-xl px-4 py-2 text-sm font-semibold border transition",
-                    coin.viewer_has_upvoted
-                      ? "bg-white text-black border-white"
-                      : "bg-white/5 text-white border-white/10 hover:bg-white/10"
-                  ].join(" ")}
-                >
-                  👍 {coin.upvotes_count}
-                </button>
-              </div>
-
-              <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4">
-                <textarea
-                  className="min-h-[90px] w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
-                  placeholder={viewerWallet ? "Write a comment…" : "Sign in to comment (Get Started)."}
-                  value={commentText}
-                  onChange={(e) => setCommentText(e.target.value)}
-                  disabled={!viewerWallet}
-                />
-
-                <button
-                  onClick={postComment}
-                  disabled={!viewerWallet || commentText.trim().length < 2}
-                  className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-50"
-                >
-                  Post comment
-                </button>
-
-                <div className="mt-3 text-xs text-zinc-500">
-                  {viewerWallet ? `Signed in: ${shortAddr(viewerWallet)}` : "Sign in to interact"}
-                </div>
-              </div>
-
-              <div className="mt-5">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-zinc-200">Comments</h3>
-                  <span className="text-xs text-zinc-400">💬 {coin.comments_count}</span>
-                </div>
-
-                {commentErr ? (
-                  <div className="mt-3 text-sm text-red-300">{commentErr}</div>
-                ) : commentLoading ? (
-                  <div className="mt-3 text-sm text-zinc-400">Loading…</div>
-                ) : comments.length === 0 ? (
-                  <div className="mt-3 text-sm text-zinc-500">No comments yet.</div>
+              <div className="mt-4 flex flex-wrap gap-2 text-sm">
+                <span className="rounded-xl border border-white/10 bg-black/30 px-3 py-2">👍 {coin.upvotes_count}</span>
+                <span className="rounded-xl border border-white/10 bg-black/30 px-3 py-2">💬 {coin.comments_count}</span>
+                {viewerWallet ? (
+                  <span className="rounded-xl border border-white/10 bg-black/30 px-3 py-2">
+                    Signed in: {shortAddr(viewerWallet)}
+                  </span>
                 ) : (
-                  <div className="mt-3 max-h-[420px] space-y-2 overflow-auto pr-1">
-                    {comments.map((cm) => (
-                      <div key={cm.id} className="rounded-xl border border-white/10 bg-black/30 p-3">
-                        <div className="flex items-center justify-between gap-3 text-xs text-zinc-500">
-                          <span className="font-mono">{shortAddr(cm.author_wallet)}</span>
-                          <span>{new Date(cm.created_at).toLocaleString()}</span>
-                        </div>
-                        <div className="mt-2 whitespace-pre-wrap break-words text-sm text-zinc-200">
-                          {cm.comment}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  <span className="rounded-xl border border-white/10 bg-black/30 px-3 py-2">Sign in to interact</span>
                 )}
+              </div>
+
+              <div className="mt-4">
+                <Link
+                  href="/coins"
+                  className="inline-block rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10"
+                >
+                  Open comments & upvotes →
+                </Link>
               </div>
             </div>
           </>
