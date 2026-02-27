@@ -27,6 +27,90 @@ type DevPayload = {
   }[];
 };
 
+type ReviewsPayload = {
+  ok: true;
+  dev_wallet: string;
+  count: number;
+  avgRating: number | null;
+  reviews: Array<{
+    id: string;
+    dev_wallet: string;
+    reviewer_wallet: string;
+    rating: number;
+    comment: string | null;
+    created_at: string;
+    updated_at: string;
+  }>;
+};
+
+function shortWallet(w: string) {
+  if (!w) return "";
+  return w.slice(0, 4) + "…" + w.slice(-4);
+}
+
+function Stars({ value }: { value: number }) {
+  // value can be 1-5 integer OR avg like 4.23
+  const full = Math.floor(value);
+  const frac = value - full;
+
+  return (
+    <div className="flex items-center gap-0.5" aria-label={`${value} stars`}>
+      {Array.from({ length: 5 }).map((_, i) => {
+        const idx = i + 1;
+        const isFull = idx <= full;
+        const isHalf = !isFull && idx === full + 1 && frac >= 0.25; // simple visual
+
+        return (
+          <span
+            key={i}
+            className={[
+              "text-sm",
+              isFull ? "text-yellow-300" : isHalf ? "text-yellow-300/70" : "text-white/20"
+            ].join(" ")}
+          >
+            ★
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function StarPicker({
+  value,
+  onChange,
+  disabled
+}: {
+  value: number;
+  onChange: (n: number) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      {Array.from({ length: 5 }).map((_, i) => {
+        const n = i + 1;
+        const active = n <= value;
+        return (
+          <button
+            key={n}
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(n)}
+            className={[
+              "text-lg leading-none transition disabled:opacity-60",
+              active ? "text-yellow-300" : "text-white/25 hover:text-white/50"
+            ].join(" ")}
+            aria-label={`${n} star`}
+            title={`${n} star`}
+          >
+            ★
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function DevPublicPage({
   params
 }: {
@@ -38,6 +122,16 @@ export default function DevPublicPage({
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Reviews state
+  const [reviews, setReviews] = useState<ReviewsPayload | null>(null);
+  const [reviewsErr, setReviewsErr] = useState<string | null>(null);
+  const [reviewsBusy, setReviewsBusy] = useState(false);
+
+  // Review form
+  const [myRating, setMyRating] = useState<number>(5);
+  const [myComment, setMyComment] = useState<string>("");
+  const [submitBusy, setSubmitBusy] = useState(false);
+
   useEffect(() => {
     (async () => {
       const p = await params;
@@ -45,14 +139,11 @@ export default function DevPublicPage({
     })();
   }, [params]);
 
-  const shortWallet = useMemo(() => {
-    if (!devWallet) return "";
-    return devWallet.slice(0, 4) + "…" + devWallet.slice(-4);
-  }, [devWallet]);
+  const shortDevWallet = useMemo(() => shortWallet(devWallet), [devWallet]);
 
-  async function load(wallet: string) {
+  async function loadDev(wallet: string) {
     setErr(null);
-    const res = await fetch(`/api/public/dev/${encodeURIComponent(wallet)}`);
+    const res = await fetch(`/api/public/dev/${encodeURIComponent(wallet)}`, { cache: "no-store" });
     const json = await res.json().catch(() => null);
 
     if (!res.ok) {
@@ -64,10 +155,42 @@ export default function DevPublicPage({
     setData(json);
   }
 
+  async function loadReviews(wallet: string) {
+    setReviewsErr(null);
+    setReviewsBusy(true);
+    try {
+      const res = await fetch(`/api/public/dev/${encodeURIComponent(wallet)}/reviews`, {
+        cache: "no-store"
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setReviewsErr(json?.error ?? "Failed to load reviews");
+        setReviews(null);
+        return;
+      }
+      setReviews(json as ReviewsPayload);
+    } finally {
+      setReviewsBusy(false);
+    }
+  }
+
   useEffect(() => {
-    if (devWallet) load(devWallet);
+    if (!devWallet) return;
+    loadDev(devWallet);
+    loadReviews(devWallet);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [devWallet]);
+
+  // Prefill the form if the viewer already left a review
+  useEffect(() => {
+    if (!data?.viewerWallet || !reviews?.reviews) return;
+
+    const mine = reviews.reviews.find((r) => r.reviewer_wallet === data.viewerWallet);
+    if (!mine) return;
+
+    setMyRating(Number(mine.rating) || 5);
+    setMyComment((mine.comment ?? "").toString());
+  }, [data?.viewerWallet, reviews?.reviews]);
 
   async function toggleFollow() {
     if (!data || !devWallet) return;
@@ -92,11 +215,51 @@ export default function DevPublicPage({
         return;
       }
 
-      await load(devWallet);
+      await loadDev(devWallet);
     } finally {
       setBusy(false);
     }
   }
+
+  async function submitReview() {
+    if (!data?.viewerWallet) {
+      alert("Sign in first (Get Started) to leave a review.");
+      return;
+    }
+    if (!devWallet) return;
+
+    if (data.viewerWallet === devWallet) {
+      alert("You can’t review yourself.");
+      return;
+    }
+
+    setSubmitBusy(true);
+    try {
+      const res = await fetch(`/api/public/dev/${encodeURIComponent(devWallet)}/reviews`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rating: myRating,
+          comment: myComment
+        })
+      });
+
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(json?.error ?? "Review failed");
+        return;
+      }
+
+      // Refresh reviews to update avg/count + show your latest
+      await loadReviews(devWallet);
+      alert("Review saved.");
+    } finally {
+      setSubmitBusy(false);
+    }
+  }
+
+  const avg = reviews?.avgRating ?? null;
+  const count = reviews?.count ?? 0;
 
   return (
     <main className="min-h-screen bg-authswap text-white">
@@ -134,28 +297,46 @@ export default function DevPublicPage({
           <div className="mt-6 text-zinc-400">Loading…</div>
         ) : (
           <>
+            {/* Profile card */}
             <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-5">
-              <div className="flex items-center gap-4">
-                <div className="h-14 w-14 overflow-hidden rounded-full border border-white/10 bg-white/5">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  {data.profile.pfp_url ? (
-                    <img src={data.profile.pfp_url} alt="" className="h-full w-full object-cover" />
-                  ) : null}
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-4">
+                  <div className="h-14 w-14 overflow-hidden rounded-full border border-white/10 bg-white/5">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    {data.profile.pfp_url ? (
+                      <img src={data.profile.pfp_url} alt="" className="h-full w-full object-cover" />
+                    ) : null}
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="text-lg font-semibold">{data.profile.display_name}</div>
+                    <div className="mt-1 text-xs text-zinc-400">Wallet: {shortDevWallet}</div>
+                    {data.profile.x_url ? (
+                      <a
+                        href={data.profile.x_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-1 inline-block text-xs text-zinc-300 hover:text-white"
+                      >
+                        X/Twitter ↗
+                      </a>
+                    ) : null}
+                  </div>
                 </div>
 
-                <div className="min-w-0">
-                  <div className="text-lg font-semibold">{data.profile.display_name}</div>
-                  <div className="mt-1 text-xs text-zinc-400">Wallet: {shortWallet}</div>
-                  {data.profile.x_url ? (
-                    <a
-                      href={data.profile.x_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-1 inline-block text-xs text-zinc-300 hover:text-white"
-                    >
-                      X/Twitter ↗
-                    </a>
-                  ) : null}
+                {/* Rating summary */}
+                <div className="rounded-2xl border border-white/10 bg-black/25 px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <div className="text-2xl font-semibold">
+                      {avg == null ? "—" : avg.toFixed(2)}
+                    </div>
+                    <div>
+                      <Stars value={avg ?? 0} />
+                      <div className="mt-1 text-xs text-zinc-400">
+                        {count} review{count === 1 ? "" : "s"}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -166,6 +347,91 @@ export default function DevPublicPage({
               )}
             </div>
 
+            {/* Reviews */}
+            <div className="mt-6 grid gap-6 lg:grid-cols-2">
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-semibold">Reviews</h2>
+                  {reviewsBusy ? <span className="text-xs text-zinc-400">Loading…</span> : null}
+                </div>
+
+                {reviewsErr ? (
+                  <div className="mt-4 rounded-xl border border-red-400/20 bg-red-400/10 p-4 text-sm text-red-200">
+                    {reviewsErr}
+                  </div>
+                ) : null}
+
+                <div className="mt-4 space-y-2">
+                  {reviews?.reviews?.length ? (
+                    reviews.reviews.slice(0, 12).map((r) => (
+                      <div key={r.id} className="rounded-xl border border-white/10 bg-black/30 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-xs text-zinc-400 font-mono">
+                            {shortWallet(r.reviewer_wallet)}
+                          </div>
+                          <Stars value={Number(r.rating) || 0} />
+                        </div>
+                        {r.comment ? (
+                          <div className="mt-2 text-sm text-zinc-200">{r.comment}</div>
+                        ) : (
+                          <div className="mt-2 text-sm text-zinc-500">No comment.</div>
+                        )}
+                        <div className="mt-2 text-[11px] text-zinc-500">
+                          {new Date(r.created_at).toLocaleString()}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-sm text-zinc-500">No reviews yet.</div>
+                  )}
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
+                <h2 className="text-lg font-semibold">Leave a review</h2>
+
+                {!data.viewerWallet ? (
+                  <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-4 text-sm text-zinc-300">
+                    Sign in via <span className="text-white">Get Started</span> to leave a review.
+                  </div>
+                ) : data.viewerWallet === devWallet ? (
+                  <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-4 text-sm text-zinc-300">
+                    You can’t review yourself.
+                  </div>
+                ) : (
+                  <>
+                    <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-sm text-zinc-200">Your rating</div>
+                        <StarPicker value={myRating} onChange={setMyRating} disabled={submitBusy} />
+                      </div>
+
+                      <textarea
+                        className="mt-3 min-h-[110px] w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
+                        placeholder="Share your experience (optional)…"
+                        value={myComment}
+                        onChange={(e) => setMyComment(e.target.value)}
+                        maxLength={2000}
+                      />
+
+                      <button
+                        onClick={submitReview}
+                        disabled={submitBusy}
+                        className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+                      >
+                        {submitBusy ? "Saving…" : "Submit review"}
+                      </button>
+
+                      <p className="mt-2 text-xs text-zinc-500">
+                        One review per wallet. Submitting again updates your existing review.
+                      </p>
+                    </div>
+                  </>
+                )}
+              </section>
+            </div>
+
+            {/* Existing: updates + coins */}
             <div className="mt-6 grid gap-6 lg:grid-cols-2">
               <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
                 <h2 className="text-lg font-semibold">Updates</h2>
@@ -191,7 +457,12 @@ export default function DevPublicPage({
                   ) : (
                     data.coins.slice(0, 30).map((c) => (
                       <div key={c.id} className="rounded-xl border border-white/10 bg-black/30 p-4">
-                        <div className="text-sm font-semibold">{c.title ?? "Untitled coin"}</div>
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-semibold">{c.title ?? "Untitled coin"}</div>
+                          <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] text-zinc-300">
+                            Permanent
+                          </span>
+                        </div>
                         <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
                         {c.description ? <div className="mt-2 text-xs text-zinc-300">{c.description}</div> : null}
                       </div>
