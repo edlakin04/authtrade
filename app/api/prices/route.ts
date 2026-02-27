@@ -10,16 +10,11 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Missing ids" }, { status: 400 });
   }
 
-  // Optional: if you later set an API key in env, we’ll include it.
-  const apiKey = process.env.JUP_API_KEY;
+  // Use Jupiter "lite" base (recommended in their docs for Price V3)
+  // Response format is: { [mint]: { usdPrice: number, ... } }
+  const url = `https://lite-api.jup.ag/price/v3?ids=${encodeURIComponent(ids)}`;
 
-  const url = `https://api.jup.ag/price/v3?ids=${encodeURIComponent(ids)}`;
-
-  const res = await fetch(url, {
-    headers: apiKey ? { "x-api-key": apiKey } : undefined,
-    // avoid caching stale prices
-    cache: "no-store"
-  });
+  const res = await fetch(url, { cache: "no-store" });
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -29,6 +24,10 @@ export async function GET(req: Request) {
     );
   }
 
-  const data = await res.json();
+  const data = await res.json().catch(() => null);
+  if (!data || typeof data !== "object") {
+    return NextResponse.json({ error: "Bad price response" }, { status: 502 });
+  }
+
   return NextResponse.json(data);
 }
