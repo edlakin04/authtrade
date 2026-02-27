@@ -72,13 +72,26 @@ export default function DashboardPage() {
                   ) : (
                     (following.coins ?? []).slice(0, 8).map((c: any) => (
                       <div key={c.id} className="rounded-xl border border-white/10 bg-black/30 p-3">
-                        <div className="text-sm font-semibold">{c.title ?? "Untitled coin"}</div>
-                        <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
-                        <div className="mt-1 text-xs text-zinc-500">
-                          by{" "}
-                          <Link href={`/dev/${c.wallet}`} className="hover:text-white">
-                            {c.wallet}
-                          </Link>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-sm font-semibold">{c.title ?? "Untitled coin"}</div>
+                            <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
+                            <div className="mt-1 text-xs text-zinc-500">
+                              by{" "}
+                              <Link href={`/dev/${c.wallet}`} className="hover:text-white">
+                                {c.wallet}
+                              </Link>
+                            </div>
+                          </div>
+
+                          <div className="shrink-0">
+                            <Link
+                              href={`/coin/${encodeURIComponent(c.id)}`}
+                              className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs hover:bg-white/10"
+                            >
+                              Open →
+                            </Link>
+                          </div>
                         </div>
                       </div>
                     ))
@@ -151,15 +164,28 @@ export default function DashboardPage() {
                 ) : (
                   (data.coins ?? []).slice(0, 12).map((c: any) => (
                     <div key={c.id} className="rounded-xl border border-white/10 bg-black/30 p-4">
-                      <div className="text-sm font-semibold">{c.title ?? "Untitled coin"}</div>
-                      <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
-                      <div className="mt-1 text-xs text-zinc-500">
-                        Posted by{" "}
-                        <Link href={`/dev/${c.wallet}`} className="hover:text-white">
-                          {c.wallet}
-                        </Link>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold">{c.title ?? "Untitled coin"}</div>
+                          <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
+                          <div className="mt-1 text-xs text-zinc-500">
+                            Posted by{" "}
+                            <Link href={`/dev/${c.wallet}`} className="hover:text-white">
+                              {c.wallet}
+                            </Link>
+                          </div>
+                          {c.description ? <div className="mt-2 text-xs text-zinc-300">{c.description}</div> : null}
+                        </div>
+
+                        <div className="shrink-0">
+                          <Link
+                            href={`/coin/${encodeURIComponent(c.id)}`}
+                            className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs hover:bg-white/10"
+                          >
+                            Open →
+                          </Link>
+                        </div>
                       </div>
-                      {c.description ? <div className="mt-2 text-xs text-zinc-300">{c.description}</div> : null}
                     </div>
                   ))
                 )}
