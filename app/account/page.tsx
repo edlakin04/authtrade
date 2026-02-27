@@ -23,14 +23,18 @@ type Portfolio = {
 
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
-function shortMint(m: string) {
+function shortAddr(m: string) {
   if (!m) return "";
   return `${m.slice(0, 4)}…${m.slice(-4)}`;
 }
 
 function fmtUsd(n: number | null | undefined) {
   if (n == null || !Number.isFinite(n)) return "—";
-  return n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+  return n.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2
+  });
 }
 
 export default function AccountPage() {
@@ -55,7 +59,9 @@ export default function AccountPage() {
       setLoading(true);
       setErr(null);
       try {
-        const res = await fetch(`/api/portfolio?owner=${encodeURIComponent(owner)}`, { cache: "no-store" });
+        const res = await fetch(`/api/portfolio?owner=${encodeURIComponent(owner)}`, {
+          cache: "no-store"
+        });
         const json = await res.json().catch(() => null);
 
         if (!res.ok) throw new Error(json?.details || json?.error || "Failed to load portfolio");
@@ -81,7 +87,7 @@ export default function AccountPage() {
           <div>
             <h1 className="text-2xl font-semibold">Account</h1>
             <p className="mt-1 text-sm text-zinc-400">
-              Portfolio for {owner ? shortMint(owner) : "—"}
+              Portfolio for {owner ? shortAddr(owner) : "—"}
             </p>
           </div>
 
@@ -105,7 +111,9 @@ export default function AccountPage() {
               <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
                 <p className="text-xs text-zinc-400">Total balance</p>
                 <p className="mt-2 text-2xl font-semibold">{fmtUsd(data?.totalUsd ?? null)}</p>
-                <p className="mt-1 text-xs text-zinc-500">Est. USD value via Jupiter price feed</p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Estimated USD value from live prices (some tokens may not have a price).
+                </p>
               </div>
 
               <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
@@ -151,9 +159,10 @@ export default function AccountPage() {
                 {data?.tokens?.map((t) => (
                   <div key={t.mint} className="flex flex-wrap items-center justify-between gap-3 py-4">
                     <div className="min-w-[240px]">
-                      <p className="text-sm font-medium">{shortMint(t.mint)}</p>
+                      <p className="text-sm font-medium">{shortAddr(t.mint)}</p>
                       <p className="mt-1 text-xs text-zinc-400">
-                        {t.uiAmount.toLocaleString(undefined, { maximumFractionDigits: 6 })} •{" "}
+                        {t.uiAmount.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                        {" • "}
                         {t.usdPrice ? `$${t.usdPrice.toFixed(6)}` : "No price"}
                       </p>
                     </div>
@@ -182,7 +191,7 @@ export default function AccountPage() {
               </div>
 
               <p className="mt-4 text-xs text-zinc-500">
-                Prices are fetched via Jupiter Price API V3 and may be unavailable for some tokens. :contentReference[oaicite:2]{index=2}
+                Note: Some tokens may show no USD value if they don’t have a live price.
               </p>
             </div>
           </>
