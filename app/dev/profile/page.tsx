@@ -122,18 +122,6 @@ export default function DevProfilePage() {
     await refresh();
   }
 
-  async function removeCoin(id: string) {
-    const res = await fetch("/api/dev/coins", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id })
-    });
-
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return alert(data?.error ?? "Remove failed");
-    await refresh();
-  }
-
   async function deleteProfile() {
     const ok = confirm("Delete your dev profile and remove all your posts + coins?");
     if (!ok) return;
@@ -236,7 +224,18 @@ export default function DevProfilePage() {
             </div>
 
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5 lg:col-span-2">
-              <h2 className="text-lg font-semibold">Coins</h2>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold">Coins</h2>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Coins you post are permanent and cannot be removed individually.
+                  </p>
+                </div>
+
+                <span className="shrink-0 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
+                  Immutable
+                </span>
+              </div>
 
               <div className="mt-4 grid gap-3 md:grid-cols-3">
                 <input
@@ -273,19 +272,26 @@ export default function DevProfilePage() {
                   coins.map((c) => (
                     <div
                       key={c.id}
-                      className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/30 p-3"
+                      className="flex items-start justify-between gap-3 rounded-xl border border-white/10 bg-black/30 p-3"
                     >
                       <div className="min-w-0">
-                        <div className="text-sm font-semibold text-zinc-200">{c.title ?? "Untitled coin"}</div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="text-sm font-semibold text-zinc-200">{c.title ?? "Untitled coin"}</div>
+                          <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] text-zinc-300">
+                            Posted
+                          </span>
+                        </div>
                         <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
                         {c.description ? <div className="mt-1 text-xs text-zinc-300">{c.description}</div> : null}
+                        <div className="mt-2 text-[11px] text-zinc-500">
+                          {new Date(c.created_at).toLocaleString()}
+                        </div>
                       </div>
-                      <button
-                        onClick={() => removeCoin(c.id)}
-                        className="shrink-0 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-200 hover:bg-white/10"
-                      >
-                        Remove
-                      </button>
+
+                      {/* No remove button on purpose */}
+                      <span className="shrink-0 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
+                        Permanent
+                      </span>
                     </div>
                   ))
                 )}
