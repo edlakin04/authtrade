@@ -45,7 +45,7 @@ export default function DevProfilePage() {
 
   async function refresh() {
     setLoading(true);
-    const res = await fetch("/api/dev/profile");
+    const res = await fetch("/api/dev/profile", { cache: "no-store" });
     const data = await res.json().catch(() => null);
     setLoading(false);
 
@@ -288,7 +288,6 @@ export default function DevProfilePage() {
                         </div>
                       </div>
 
-                      {/* No remove button on purpose */}
                       <span className="shrink-0 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
                         Permanent
                       </span>
