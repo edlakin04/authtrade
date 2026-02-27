@@ -7,10 +7,8 @@ export const dynamic = "force-dynamic";
 
 async function safeReadJson(req: Request): Promise<any | null> {
   try {
-    // Normal path
     return await req.json();
   } catch {
-    // Fallback: try text -> JSON
     try {
       const txt = await req.text();
       if (!txt) return null;
@@ -27,13 +25,23 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
   const { data, error } = await sb
     .from("coin_comments")
-    .select("id, coin_id, commenter_wallet, content, created_at")
+    .select("id, coin_id, author_wallet, comment, created_at")
     .eq("coin_id", id)
     .order("created_at", { ascending: false })
-    .limit(100);
+    .limit(200);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ ok: true, comments: data ?? [] });
+
+  return NextResponse.json({
+    ok: true,
+    comments: (data ?? []).map((r) => ({
+      id: r.id,
+      coin_id: r.coin_id,
+      author_wallet: r.author_wallet,
+      comment: r.comment,
+      created_at: r.created_at
+    }))
+  });
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -48,34 +56,29 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const body = await safeReadJson(req);
 
-  // accept multiple keys to avoid mismatches
+  // accept multiple keys so your UI can send whatever
   const raw =
-    (typeof body?.content === "string" && body.content) ||
     (typeof body?.comment === "string" && body.comment) ||
+    (typeof body?.content === "string" && body.content) ||
     (typeof body?.text === "string" && body.text) ||
     "";
 
-  const content = raw.trim();
+  const comment = raw.trim();
+  if (!comment) return NextResponse.json({ error: "Comment is empty" }, { status: 400 });
 
-  if (!content) {
-    return NextResponse.json({ error: "Comment is empty" }, { status: 400 });
-  }
-  if (content.length < 2) {
-    return NextResponse.json({ error: "Comment too short" }, { status: 400 });
-  }
-  if (content.length > 500) {
-    return NextResponse.json({ error: "Comment too long (max 500 chars)" }, { status: 400 });
+  if (comment.length > 2000) {
+    return NextResponse.json({ error: "Comment too long (max 2000 chars)" }, { status: 400 });
   }
 
   const sb = supabaseAdmin();
 
-  // ensure user row exists
+  // ensure users row exists
   await sb.from("users").upsert({ wallet: session.wallet }, { onConflict: "wallet" });
 
   const { error } = await sb.from("coin_comments").insert({
     coin_id: id,
-    commenter_wallet: session.wallet,
-    content
+    author_wallet: session.wallet,
+    comment
   });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
