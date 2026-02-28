@@ -25,9 +25,22 @@ type CommentRow = {
   created_at: string;
 };
 
+type Meta = {
+  name: string | null;
+  symbol: string | null;
+  image: string | null;
+};
+
 function shortAddr(s: string) {
   if (!s) return "";
   return `${s.slice(0, 4)}…${s.slice(-4)}`;
+}
+
+function initials(name: string) {
+  const n = (name || "").trim();
+  if (!n) return "?";
+  const parts = n.split(/\s+/).slice(0, 2);
+  return parts.map((p) => p.slice(0, 1).toUpperCase()).join("");
 }
 
 export default function CoinsPage() {
@@ -36,6 +49,9 @@ export default function CoinsPage() {
 
   const [viewerWallet, setViewerWallet] = useState<string | null>(null);
   const [coins, setCoins] = useState<CoinRow[]>([]);
+
+  // token metadata for list UI
+  const [metaByMint, setMetaByMint] = useState<Record<string, Meta>>({});
 
   const [sort, setSort] = useState<"trending" | "newest">("trending");
   const [q, setQ] = useState("");
@@ -75,6 +91,37 @@ export default function CoinsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [qs]);
 
+  // Batch-load Jupiter metadata for visible coins
+  useEffect(() => {
+    const mints = Array.from(
+      new Set((coins ?? []).map((c) => c.token_address).filter(Boolean))
+    ).slice(0, 50);
+
+    if (mints.length === 0) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await fetch(`/api/coin-live/batch?mints=${encodeURIComponent(mints.join(","))}`, {
+          cache: "no-store"
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok) return;
+
+        if (!cancelled && json?.byMint) {
+          setMetaByMint((prev) => ({ ...prev, ...(json.byMint as Record<string, Meta>) }));
+        }
+      } catch {
+        // ignore
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [coins]);
+
   async function toggleUpvote(c: CoinRow) {
     if (!viewerWallet) {
       alert("Sign in first (Get Started) to upvote.");
@@ -113,7 +160,6 @@ export default function CoinsPage() {
       const json = await res.json().catch(() => null);
       if (!res.ok) throw new Error(json?.error || "Failed to load comments");
 
-      // API returns: author_wallet + comment
       setComments((json.comments ?? []) as CommentRow[]);
     } catch (e: any) {
       alert(e?.message ?? "Failed to load comments");
@@ -135,7 +181,6 @@ export default function CoinsPage() {
     const res = await fetch(`/api/coins/${encodeURIComponent(openCoin.id)}/comments`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // matches your Supabase schema
       body: JSON.stringify({ comment })
     });
 
@@ -147,6 +192,37 @@ export default function CoinsPage() {
 
     setCoins((prev) =>
       prev.map((x) => (x.id === openCoin.id ? { ...x, comments_count: x.comments_count + 1 } : x))
+    );
+  }
+
+  function renderCoinHeader(c: CoinRow) {
+    const meta = metaByMint[c.token_address];
+    const displayName = meta?.name || c.title || "Untitled coin";
+    const symbol = meta?.symbol;
+
+    return (
+      <div className="flex items-center gap-3">
+        <div className="h-10 w-10 overflow-hidden rounded-xl border border-white/10 bg-black/30 flex items-center justify-center">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          {meta?.image ? (
+            <img src={meta.image} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <span className="text-xs text-zinc-300">{initials(symbol || displayName)}</span>
+          )}
+        </div>
+
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="truncate text-lg font-semibold">{displayName}</div>
+            {symbol ? (
+              <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] text-zinc-300">
+                {symbol}
+              </span>
+            ) : null}
+          </div>
+          <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
+        </div>
+      </div>
     );
   }
 
@@ -214,13 +290,12 @@ export default function CoinsPage() {
                 <div key={c.id} className="rounded-2xl border border-white/10 bg-white/5 p-5">
                   <div className="flex flex-wrap items-start justify-between gap-4">
                     <div className="min-w-0">
-                      <div className="text-lg font-semibold">{c.title ?? "Untitled coin"}</div>
-                      <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
+                      {renderCoinHeader(c)}
 
                       {c.description ? (
-                        <div className="mt-2 text-sm text-zinc-300">{c.description}</div>
+                        <div className="mt-3 text-sm text-zinc-300">{c.description}</div>
                       ) : (
-                        <div className="mt-2 text-sm text-zinc-500">No description.</div>
+                        <div className="mt-3 text-sm text-zinc-500">No description.</div>
                       )}
 
                       <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-zinc-400">
@@ -329,7 +404,9 @@ export default function CoinsPage() {
                         <span>{new Date(cm.created_at).toLocaleString()}</span>
                       </div>
 
-                      <div className="mt-2 whitespace-pre-wrap break-words text-sm text-zinc-200">{cm.comment}</div>
+                      <div className="mt-2 whitespace-pre-wrap break-words text-sm text-zinc-200">
+                        {cm.comment}
+                      </div>
                     </div>
                   ))}
                 </div>
