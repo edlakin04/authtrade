@@ -57,13 +57,14 @@ function fmtUsd(n: number | null | undefined) {
 function fmtPrice(n: number | null | undefined) {
   if (n == null || !Number.isFinite(n)) return "—";
   const abs = Math.abs(n);
+  if (abs > 0 && abs < 0.0001) return `$${n.toLocaleString(undefined, { maximumFractionDigits: 12 })}`;
   if (abs > 0 && abs < 0.01) return `$${n.toLocaleString(undefined, { maximumFractionDigits: 10 })}`;
   if (abs > 0 && abs < 1) return `$${n.toLocaleString(undefined, { maximumFractionDigits: 6 })}`;
   return `$${n.toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
 }
 
-export default function CoinPage({ params }: { params: { id: string } }) {
-  const coinId = params.id;
+export default function CoinPage({ params }: { params: Promise<{ id: string }> }) {
+  const [coinId, setCoinId] = useState<string>("");
 
   const [viewerWallet, setViewerWallet] = useState<string | null>(null);
 
@@ -83,6 +84,13 @@ export default function CoinPage({ params }: { params: { id: string } }) {
   const [commentLoading, setCommentLoading] = useState(false);
   const [commentText, setCommentText] = useState("");
   const [voteBusy, setVoteBusy] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const p = await params;
+      setCoinId(p.id);
+    })();
+  }, [params]);
 
   const mint = useMemo(() => coin?.token_address ?? "", [coin?.token_address]);
 
@@ -129,7 +137,6 @@ export default function CoinPage({ params }: { params: { id: string } }) {
       if (!res.ok) throw new Error(json?.error || "Failed to load comments");
       setComments((json.comments ?? []) as CommentRow[]);
     } catch (e: any) {
-      // keep quiet but visible
       console.error(e);
     } finally {
       setCommentLoading(false);
@@ -154,6 +161,7 @@ export default function CoinPage({ params }: { params: { id: string } }) {
 
     setCommentText("");
     await loadComments(coin.id);
+
     // bump count locally
     setCoin((prev) => (prev ? { ...prev, comments_count: prev.comments_count + 1 } : prev));
   }
