@@ -14,7 +14,6 @@ type TrendingCoin = {
   upvotes_count: number;
   upvotes_24h?: number;
   comments_count: number;
-  viewer_has_upvoted?: boolean;
 };
 
 type FollowCoin = {
@@ -32,6 +31,8 @@ type CoinMeta = {
   image: string | null;
 };
 
+type NameMap = Record<string, string>; // wallet -> display_name
+
 function shortAddr(s: string) {
   if (!s) return "";
   return `${s.slice(0, 4)}…${s.slice(-4)}`;
@@ -46,6 +47,9 @@ export default function DashboardPage() {
 
   // mint -> {name,symbol,image}
   const [metaByMint, setMetaByMint] = useState<Record<string, CoinMeta>>({});
+
+  // wallet -> display_name
+  const [nameByWallet, setNameByWallet] = useState<NameMap>({});
 
   useEffect(() => {
     fetch("/api/public/dashboard", { cache: "no-store" })
@@ -71,6 +75,104 @@ export default function DashboardPage() {
       });
   }, []);
 
+  // Seed name map from already-loaded trending dev profiles
+  useEffect(() => {
+    if (!data?.profiles?.length) return;
+    setNameByWallet((prev) => {
+      const next = { ...prev };
+      for (const p of data.profiles as any[]) {
+        if (p?.wallet && p?.display_name && !next[p.wallet]) next[p.wallet] = p.display_name;
+      }
+      return next;
+    });
+  }, [data?.profiles]);
+
+  // Collect all wallets we need names for (posts/coins/following)
+  const walletsToResolve = useMemo(() => {
+    const s = new Set<string>();
+
+    // dashboard posts: wallet
+    for (const p of (data?.posts ?? []) as any[]) {
+      if (p?.wallet) s.add(String(p.wallet));
+    }
+
+    // trending coins: dev_wallet
+    for (const c of (trendingCoins ?? []) as any[]) {
+      if (c?.dev_wallet) s.add(String(c.dev_wallet));
+    }
+
+    // following posts: wallet
+    for (const p of (following?.posts ?? []) as any[]) {
+      if (p?.wallet) s.add(String(p.wallet));
+    }
+
+    // following coins: wallet
+    for (const c of (following?.coins ?? []) as any[]) {
+      if (c?.wallet) s.add(String(c.wallet));
+    }
+
+    return Array.from(s);
+  }, [data?.posts, trendingCoins, following?.posts, following?.coins]);
+
+  // Resolve missing display_names via /api/public/dev/:wallet (cached in state)
+  useEffect(() => {
+    if (!walletsToResolve.length) return;
+
+    let cancelled = false;
+
+    async function run() {
+      const missing = walletsToResolve.filter((w) => !nameByWallet[w]);
+      if (missing.length === 0) return;
+
+      // Limit concurrency
+      const batchSize = 6;
+
+      for (let i = 0; i < missing.length; i += batchSize) {
+        const chunk = missing.slice(i, i + batchSize);
+
+        const results = await Promise.allSettled(
+          chunk.map(async (wallet) => {
+            const res = await fetch(`/api/public/dev/${encodeURIComponent(wallet)}`, { cache: "no-store" });
+            const json = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(json?.error || "dev fetch failed");
+            const name = json?.profile?.display_name;
+            return { wallet, name: typeof name === "string" ? name : null };
+          })
+        );
+
+        if (cancelled) return;
+
+        const updates: NameMap = {};
+        for (const r of results) {
+          if (r.status === "fulfilled" && r.value.name) {
+            updates[r.value.wallet] = r.value.name;
+          }
+        }
+
+        if (Object.keys(updates).length) {
+          setNameByWallet((prev) => ({ ...prev, ...updates }));
+        }
+      }
+    }
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walletsToResolve.join("|")]);
+
+  function devLabel(wallet: string) {
+    const name = nameByWallet[wallet];
+    return name ? name : shortAddr(wallet);
+  }
+
+  function devSub(wallet: string) {
+    const name = nameByWallet[wallet];
+    return name ? shortAddr(wallet) : null;
+  }
+
   const allMintsToHydrate = useMemo(() => {
     const t = (trendingCoins ?? []).slice(0, 12).map((c) => c.token_address).filter(Boolean);
 
@@ -82,7 +184,7 @@ export default function DashboardPage() {
     return Array.from(new Set([...t, ...f]));
   }, [trendingCoins, following?.coins]);
 
-  // Load logo/name/ticker for all coins shown on dashboard (trending + following)
+  // Load logo/name/ticker for coins shown on dashboard
   useEffect(() => {
     if (!allMintsToHydrate.length) return;
 
@@ -167,19 +269,25 @@ export default function DashboardPage() {
                     (following.posts ?? []).slice(0, 8).map((x: any) => (
                       <div key={x.id} className="rounded-xl border border-white/10 bg-black/30 p-3">
                         <Link
-                          href={`/dev/${x.wallet}`}
-                          className="font-mono text-[11px] text-zinc-500 hover:text-white"
+                          href={`/dev/${encodeURIComponent(x.wallet)}`}
+                          className="text-sm font-semibold text-zinc-200 hover:text-white"
+                          title={x.wallet}
                         >
-                          {x.wallet}
+                          {devLabel(x.wallet)}
                         </Link>
-                        <div className="mt-1 text-sm text-zinc-200">{x.content}</div>
+
+                        {devSub(x.wallet) ? (
+                          <div className="mt-0.5 font-mono text-[11px] text-zinc-500">{devSub(x.wallet)}</div>
+                        ) : null}
+
+                        <div className="mt-2 text-sm text-zinc-200">{x.content}</div>
                       </div>
                     ))
                   )}
                 </div>
               </div>
 
-              {/* FOLLOWING COINS (with logo/name/ticker + Open button) */}
+              {/* FOLLOWING COINS */}
               <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
                 <div className="text-sm font-semibold">Latest coins</div>
                 <div className="mt-3 space-y-2">
@@ -197,9 +305,7 @@ export default function DashboardPage() {
                             <div className="min-w-0 flex items-start gap-3">
                               <div className="mt-0.5 h-9 w-9 overflow-hidden rounded-xl border border-white/10 bg-white/5">
                                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                                {meta?.image ? (
-                                  <img src={meta.image} alt="" className="h-full w-full object-cover" />
-                                ) : null}
+                                {meta?.image ? <img src={meta.image} alt="" className="h-full w-full object-cover" /> : null}
                               </div>
 
                               <div className="min-w-0">
@@ -216,9 +322,16 @@ export default function DashboardPage() {
 
                                 <div className="mt-1 text-xs text-zinc-500">
                                   by{" "}
-                                  <Link href={`/dev/${encodeURIComponent(c.wallet)}`} className="hover:text-white">
-                                    {shortAddr(c.wallet)}
+                                  <Link
+                                    href={`/dev/${encodeURIComponent(c.wallet)}`}
+                                    className="hover:text-white"
+                                    title={c.wallet}
+                                  >
+                                    {devLabel(c.wallet)}
                                   </Link>
+                                  {devSub(c.wallet) ? (
+                                    <span className="ml-2 font-mono text-[11px] text-zinc-600">{devSub(c.wallet)}</span>
+                                  ) : null}
                                 </div>
                               </div>
                             </div>
@@ -286,17 +399,25 @@ export default function DashboardPage() {
                 ) : (
                   (data.posts ?? []).slice(0, 10).map((x: any) => (
                     <div key={x.id} className="rounded-xl border border-white/10 bg-black/30 p-4">
-                      <Link href={`/dev/${x.wallet}`} className="font-mono text-[11px] text-zinc-500 hover:text-white">
-                        {x.wallet}
+                      <Link
+                        href={`/dev/${encodeURIComponent(x.wallet)}`}
+                        className="text-sm font-semibold text-zinc-200 hover:text-white"
+                        title={x.wallet}
+                      >
+                        {devLabel(x.wallet)}
                       </Link>
-                      <div className="mt-1 text-sm text-zinc-200">{x.content}</div>
+
+                      {devSub(x.wallet) ? (
+                        <div className="mt-0.5 font-mono text-[11px] text-zinc-500">{devSub(x.wallet)}</div>
+                      ) : null}
+
+                      <div className="mt-2 text-sm text-zinc-200">{x.content}</div>
                     </div>
                   ))
                 )}
               </div>
             </section>
 
-            {/* Trending coins with logo + name + ticker */}
             <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
               <h2 className="text-lg font-semibold">Trending coins</h2>
               <div className="mt-4 grid gap-2">
@@ -351,9 +472,16 @@ export default function DashboardPage() {
 
                               <div className="mt-2 text-xs text-zinc-500">
                                 Posted by{" "}
-                                <Link href={`/dev/${encodeURIComponent(c.dev_wallet)}`} className="hover:text-white">
-                                  {shortAddr(c.dev_wallet)}
+                                <Link
+                                  href={`/dev/${encodeURIComponent(c.dev_wallet)}`}
+                                  className="hover:text-white"
+                                  title={c.dev_wallet}
+                                >
+                                  {devLabel(c.dev_wallet)}
                                 </Link>
+                                {devSub(c.dev_wallet) ? (
+                                  <span className="ml-2 font-mono text-[11px] text-zinc-600">{devSub(c.dev_wallet)}</span>
+                                ) : null}
                               </div>
                             </div>
                           </div>
