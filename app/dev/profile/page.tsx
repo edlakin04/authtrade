@@ -268,7 +268,7 @@ export default function DevProfilePage() {
                   <div className="min-w-0">
                     <div className="text-sm font-semibold">Profile picture</div>
                     <div className="mt-1 text-xs text-zinc-400">
-                      JPG / PNG / WEBP • max 2MB
+                      JPG / PNG / WEBP • max 5MB
                     </div>
 
                     <div className="mt-3 flex flex-wrap items-center gap-2">
