@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import TopNav from "@/components/TopNav";
 
 type Profile = {
@@ -25,6 +25,14 @@ type Post = {
   created_at: string;
 };
 
+type LiveMeta = {
+  ok: true;
+  mint: string;
+  name: string | null;
+  symbol: string | null;
+  image: string | null;
+};
+
 export default function DevProfilePage() {
   const [loading, setLoading] = useState(true);
 
@@ -42,6 +50,10 @@ export default function DevProfilePage() {
   const [coinAddr, setCoinAddr] = useState("");
   const [coinTitle, setCoinTitle] = useState("");
   const [coinDesc, setCoinDesc] = useState("");
+
+  // Coin metadata (name/symbol/logo) keyed by mint
+  const [metaByMint, setMetaByMint] = useState<Record<string, LiveMeta | null>>({});
+  const [metaLoadingMints, setMetaLoadingMints] = useState<Record<string, boolean>>({});
 
   async function refresh() {
     setLoading(true);
@@ -69,6 +81,48 @@ export default function DevProfilePage() {
   useEffect(() => {
     refresh();
   }, []);
+
+  // ---- Coin meta fetching (same source as coin page: /api/coin-live) ----
+  async function fetchCoinMeta(mint: string) {
+    const m = (mint || "").trim();
+    if (!m) return;
+
+    if (Object.prototype.hasOwnProperty.call(metaByMint, m)) return;
+
+    setMetaLoadingMints((prev) => ({ ...prev, [m]: true }));
+    try {
+      const res = await fetch(`/api/coin-live?mint=${encodeURIComponent(m)}`, { cache: "no-store" });
+      const json = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        setMetaByMint((prev) => ({ ...prev, [m]: null }));
+        return;
+      }
+
+      setMetaByMint((prev) => ({ ...prev, [m]: json as LiveMeta }));
+    } finally {
+      setMetaLoadingMints((prev) => ({ ...prev, [m]: false }));
+    }
+  }
+
+  async function fetchCoinMetaBatched(mints: string[], batchSize = 6) {
+    const uniq = Array.from(new Set(mints.filter(Boolean).map((x) => x.trim())));
+    const need = uniq.filter((m) => !Object.prototype.hasOwnProperty.call(metaByMint, m));
+    if (need.length === 0) return;
+
+    for (let i = 0; i < need.length; i += batchSize) {
+      const chunk = need.slice(i, i + batchSize);
+      await Promise.allSettled(chunk.map((m) => fetchCoinMeta(m)));
+    }
+  }
+
+  // When coins load/change, pull logo/name/symbol for the visible set
+  useEffect(() => {
+    if (!coins?.length) return;
+    const visible = coins.slice(0, 50).map((c) => c.token_address);
+    fetchCoinMetaBatched(visible, 6);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coins]);
 
   async function saveProfile() {
     const res = await fetch("/api/dev/profile", {
@@ -269,30 +323,58 @@ export default function DevProfilePage() {
                 {coins.length === 0 ? (
                   <div className="text-sm text-zinc-500">No coins yet.</div>
                 ) : (
-                  coins.map((c) => (
-                    <div
-                      key={c.id}
-                      className="flex items-start justify-between gap-3 rounded-xl border border-white/10 bg-black/30 p-3"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <div className="text-sm font-semibold text-zinc-200">{c.title ?? "Untitled coin"}</div>
-                          <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] text-zinc-300">
-                            Posted
-                          </span>
-                        </div>
-                        <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
-                        {c.description ? <div className="mt-1 text-xs text-zinc-300">{c.description}</div> : null}
-                        <div className="mt-2 text-[11px] text-zinc-500">
-                          {new Date(c.created_at).toLocaleString()}
-                        </div>
-                      </div>
+                  coins.map((c) => {
+                    const mint = c.token_address;
+                    const meta = metaByMint[mint];
+                    const loadingMeta = !!metaLoadingMints[mint];
 
-                      <span className="shrink-0 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
-                        Permanent
-                      </span>
-                    </div>
-                  ))
+                    const displayName = meta?.name || c.title || "Untitled coin";
+                    const symbol = meta?.symbol || null;
+                    const logo = meta?.image || null;
+
+                    return (
+                      <div
+                        key={c.id}
+                        className="flex items-start justify-between gap-3 rounded-xl border border-white/10 bg-black/30 p-3"
+                      >
+                        <div className="flex min-w-0 gap-3">
+                          <div className="h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-white/5">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            {logo ? (
+                              <img src={logo} alt="" className="h-full w-full object-cover" />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-xs text-zinc-500">
+                                {loadingMeta ? "…" : "⎔"}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="text-sm font-semibold text-zinc-200">{displayName}</div>
+                              {symbol ? (
+                                <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] text-zinc-300">
+                                  {symbol}
+                                </span>
+                              ) : null}
+                              {loadingMeta ? <span className="text-[11px] text-zinc-500">Loading…</span> : null}
+                              <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] text-zinc-300">
+                                Posted
+                              </span>
+                            </div>
+
+                            <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
+                            {c.description ? <div className="mt-1 text-xs text-zinc-300">{c.description}</div> : null}
+                            <div className="mt-2 text-[11px] text-zinc-500">{new Date(c.created_at).toLocaleString()}</div>
+                          </div>
+                        </div>
+
+                        <span className="shrink-0 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
+                          Permanent
+                        </span>
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </div>
