@@ -25,25 +25,11 @@ type CommentRow = {
   created_at: string;
 };
 
-type CoinMeta = {
-  mint: string;
-  name: string | null;
-  symbol: string | null;
-  image: string | null;
-};
+type NameMap = Record<string, string>; // wallet -> display_name
 
 function shortAddr(s: string) {
   if (!s) return "";
   return `${s.slice(0, 4)}…${s.slice(-4)}`;
-}
-
-function normalizeMeta(json: any, mint: string): CoinMeta {
-  return {
-    mint,
-    name: typeof json?.name === "string" ? json.name : null,
-    symbol: typeof json?.symbol === "string" ? json.symbol : null,
-    image: typeof json?.image === "string" ? json.image : null
-  };
 }
 
 export default function CoinsPage() {
@@ -56,15 +42,14 @@ export default function CoinsPage() {
   const [sort, setSort] = useState<"trending" | "newest">("trending");
   const [q, setQ] = useState("");
 
-  // comments modal state
+  // comment modal state
   const [openCoin, setOpenCoin] = useState<CoinRow | null>(null);
   const [comments, setComments] = useState<CommentRow[]>([]);
   const [commentLoading, setCommentLoading] = useState(false);
   const [commentText, setCommentText] = useState("");
 
-  // metadata cache (mint -> meta)
-  const [metaByMint, setMetaByMint] = useState<Record<string, CoinMeta>>({});
-  const [metaLoading, setMetaLoading] = useState(false);
+  // dev display names
+  const [nameByWallet, setNameByWallet] = useState<NameMap>({});
 
   const qs = useMemo(() => {
     const u = new URLSearchParams();
@@ -72,6 +57,14 @@ export default function CoinsPage() {
     if (q.trim()) u.set("q", q.trim());
     return u.toString();
   }, [sort, q]);
+
+  function devLabel(wallet: string) {
+    return nameByWallet[wallet] || shortAddr(wallet);
+  }
+
+  function devSub(wallet: string) {
+    return nameByWallet[wallet] ? shortAddr(wallet) : null;
+  }
 
   async function load() {
     setLoading(true);
@@ -95,52 +88,44 @@ export default function CoinsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [qs]);
 
-  // Fetch name/symbol/logo for visible coins (no batch route needed)
+  // Resolve missing dev display_names
   useEffect(() => {
+    if (!coins.length) return;
+
     let cancelled = false;
 
-    async function fetchOne(mint: string) {
-      try {
-        const res = await fetch(`/api/coin-live?mint=${encodeURIComponent(mint)}`, { cache: "no-store" });
-        const json = await res.json().catch(() => null);
-        if (!res.ok) return null;
-        return normalizeMeta(json, mint);
-      } catch {
-        return null;
-      }
-    }
-
     async function run() {
-      if (!coins || coins.length === 0) return;
+      const wallets = Array.from(new Set(coins.map((c) => c.dev_wallet).filter(Boolean)));
+      const missing = wallets.filter((w) => !nameByWallet[w]);
+      if (!missing.length) return;
 
-      const uniqueMints = Array.from(new Set(coins.map((c) => c.token_address).filter(Boolean)));
-      const missing = uniqueMints.filter((m) => !metaByMint[m]);
+      const batchSize = 6;
+      for (let i = 0; i < missing.length; i += batchSize) {
+        const chunk = missing.slice(i, i + batchSize);
 
-      if (missing.length === 0) return;
+        const results = await Promise.allSettled(
+          chunk.map(async (wallet) => {
+            const res = await fetch(`/api/public/dev/${encodeURIComponent(wallet)}`, { cache: "no-store" });
+            const json = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(json?.error || "Failed to load dev");
+            const name = json?.profile?.display_name;
+            return { wallet, name: typeof name === "string" ? name : null };
+          })
+        );
 
-      setMetaLoading(true);
-
-      // simple concurrency limiter
-      const limit = 6;
-      let i = 0;
-
-      const next = async (): Promise<void> => {
         if (cancelled) return;
-        const mint = missing[i++];
-        if (!mint) return;
 
-        const meta = await fetchOne(mint);
-        if (!cancelled && meta) {
-          setMetaByMint((prev) => ({ ...prev, [mint]: meta }));
+        const updates: NameMap = {};
+        for (const r of results) {
+          if (r.status === "fulfilled" && r.value.name) {
+            updates[r.value.wallet] = r.value.name;
+          }
         }
 
-        if (i < missing.length) await next();
-      };
-
-      const starters = Array.from({ length: Math.min(limit, missing.length) }, () => next());
-      await Promise.all(starters);
-
-      if (!cancelled) setMetaLoading(false);
+        if (Object.keys(updates).length) {
+          setNameByWallet((prev) => ({ ...prev, ...updates }));
+        }
+      }
     }
 
     run();
@@ -148,9 +133,8 @@ export default function CoinsPage() {
     return () => {
       cancelled = true;
     };
-    // we intentionally depend on `coins` and `metaByMint`
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [coins]);
+  }, [coins.map((c) => c.dev_wallet).join("|")]);
 
   async function toggleUpvote(c: CoinRow) {
     if (!viewerWallet) {
@@ -190,6 +174,7 @@ export default function CoinsPage() {
       const json = await res.json().catch(() => null);
       if (!res.ok) throw new Error(json?.error || "Failed to load comments");
 
+      // API returns: author_wallet + comment
       setComments((json.comments ?? []) as CommentRow[]);
     } catch (e: any) {
       alert(e?.message ?? "Failed to load comments");
@@ -211,7 +196,8 @@ export default function CoinsPage() {
     const res = await fetch(`/api/coins/${encodeURIComponent(openCoin.id)}/comments`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ comment }) // matches your schema
+      // matches your Supabase schema
+      body: JSON.stringify({ comment })
     });
 
     const json = await res.json().catch(() => ({}));
@@ -233,10 +219,7 @@ export default function CoinsPage() {
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold">Coins</h1>
-            <p className="mt-1 text-sm text-zinc-400">
-              Upvote and discuss coins posted by devs.
-              {metaLoading ? <span className="ml-2 text-xs text-zinc-500">Loading logos…</span> : null}
-            </p>
+            <p className="mt-1 text-sm text-zinc-400">Upvote and discuss coins posted by devs.</p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -288,89 +271,74 @@ export default function CoinsPage() {
                 No coins found.
               </div>
             ) : (
-              coins.map((c) => {
-                const meta = metaByMint[c.token_address];
-                const displayName = meta?.name || c.title || "Untitled coin";
-                const ticker = meta?.symbol ? meta.symbol : null;
+              coins.map((c) => (
+                <div key={c.id} className="rounded-2xl border border-white/10 bg-white/5 p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-lg font-semibold">{c.title ?? "Untitled coin"}</div>
+                      <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
 
-                return (
-                  <div key={c.id} className="rounded-2xl border border-white/10 bg-white/5 p-5">
-                    <div className="flex flex-wrap items-start justify-between gap-4">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-3">
-                          <div className="h-10 w-10 overflow-hidden rounded-xl border border-white/10 bg-black/30">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            {meta?.image ? (
-                              <img src={meta.image} alt="" className="h-full w-full object-cover" />
-                            ) : null}
-                          </div>
+                      {c.description ? (
+                        <div className="mt-2 text-sm text-zinc-300">{c.description}</div>
+                      ) : (
+                        <div className="mt-2 text-sm text-zinc-500">No description.</div>
+                      )}
 
-                          <div className="min-w-0">
-                            <div className="truncate text-lg font-semibold">
-                              {displayName}
-                              {ticker ? <span className="ml-2 text-zinc-400">({ticker})</span> : null}
-                            </div>
-                            <div className="mt-0.5 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
-                          </div>
-                        </div>
-
-                        {c.description ? (
-                          <div className="mt-3 text-sm text-zinc-300">{c.description}</div>
-                        ) : (
-                          <div className="mt-3 text-sm text-zinc-500">No description.</div>
-                        )}
-
-                        <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-zinc-400">
-                          <span>Dev: {shortAddr(c.dev_wallet)}</span>
-                          <span>•</span>
-                          <span>{new Date(c.created_at).toLocaleString()}</span>
-
-                          <span>•</span>
-                          <Link href={`/coin/${encodeURIComponent(c.id)}`} className="text-zinc-200 hover:text-white">
-                            View coin →
-                          </Link>
-
-                          <span>•</span>
+                      <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-zinc-400">
+                        <span>
+                          Dev:{" "}
                           <Link
                             href={`/dev/${encodeURIComponent(c.dev_wallet)}`}
                             className="text-zinc-200 hover:text-white"
+                            title={c.dev_wallet}
                           >
-                            View dev →
+                            {devLabel(c.dev_wallet)}
                           </Link>
-                        </div>
-                      </div>
+                          {devSub(c.dev_wallet) ? (
+                            <span className="ml-2 font-mono text-[11px] text-zinc-500">{devSub(c.dev_wallet)}</span>
+                          ) : null}
+                        </span>
 
-                      <div className="flex shrink-0 flex-col gap-2">
-                        <button
-                          onClick={() => toggleUpvote(c)}
-                          className={[
-                            "rounded-xl px-4 py-2 text-sm font-semibold border transition",
-                            c.viewer_has_upvoted
-                              ? "bg-white text-black border-white"
-                              : "bg-white/5 text-white border-white/10 hover:bg-white/10"
-                          ].join(" ")}
-                        >
-                          👍 {c.upvotes_count}
-                        </button>
+                        <span>•</span>
+                        <span>{new Date(c.created_at).toLocaleString()}</span>
 
-                        <button
-                          onClick={() => openComments(c)}
-                          className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10"
-                        >
-                          💬 {c.comments_count}
-                        </button>
-
-                        <Link
-                          href={`/trade?outputMint=${encodeURIComponent(c.token_address)}`}
-                          className="rounded-xl bg-white px-4 py-2 text-center text-sm font-semibold text-black hover:bg-zinc-200"
-                        >
-                          Trade
+                        <span>•</span>
+                        <Link href={`/coin/${encodeURIComponent(c.id)}`} className="text-zinc-200 hover:text-white">
+                          View coin →
                         </Link>
                       </div>
                     </div>
+
+                    <div className="flex shrink-0 flex-col gap-2">
+                      <button
+                        onClick={() => toggleUpvote(c)}
+                        className={[
+                          "rounded-xl px-4 py-2 text-sm font-semibold border transition",
+                          c.viewer_has_upvoted
+                            ? "bg-white text-black border-white"
+                            : "bg-white/5 text-white border-white/10 hover:bg-white/10"
+                        ].join(" ")}
+                      >
+                        👍 {c.upvotes_count}
+                      </button>
+
+                      <button
+                        onClick={() => openComments(c)}
+                        className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10"
+                      >
+                        💬 {c.comments_count}
+                      </button>
+
+                      <Link
+                        href={`/trade?outputMint=${encodeURIComponent(c.token_address)}`}
+                        className="rounded-xl bg-white px-4 py-2 text-center text-sm font-semibold text-black hover:bg-zinc-200"
+                      >
+                        Trade
+                      </Link>
+                    </div>
                   </div>
-                );
-              })
+                </div>
+              ))
             )}
           </div>
         )}
@@ -427,9 +395,7 @@ export default function CoinsPage() {
                         <span>{new Date(cm.created_at).toLocaleString()}</span>
                       </div>
 
-                      <div className="mt-2 whitespace-pre-wrap break-words text-sm text-zinc-200">
-                        {cm.comment}
-                      </div>
+                      <div className="mt-2 whitespace-pre-wrap break-words text-sm text-zinc-200">{cm.comment}</div>
                     </div>
                   ))}
                 </div>
