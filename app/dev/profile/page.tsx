@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import TopNav from "@/components/TopNav";
 
 type Profile = {
@@ -42,7 +42,7 @@ export default function DevProfilePage() {
 
   const [displayName, setDisplayName] = useState("");
   const [bio, setBio] = useState("");
-  const [pfpUrl, setPfpUrl] = useState("");
+  const [pfpUrl, setPfpUrl] = useState(""); // stored URL (from Supabase)
   const [xUrl, setXUrl] = useState("");
 
   const [postContent, setPostContent] = useState("");
@@ -51,9 +51,20 @@ export default function DevProfilePage() {
   const [coinTitle, setCoinTitle] = useState("");
   const [coinDesc, setCoinDesc] = useState("");
 
+  // PFP picker/upload state
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [pfpUploading, setPfpUploading] = useState(false);
+  const [pfpErr, setPfpErr] = useState<string | null>(null);
+  const [pfpPreview, setPfpPreview] = useState<string | null>(null);
+
   // Coin metadata (name/symbol/logo) keyed by mint
   const [metaByMint, setMetaByMint] = useState<Record<string, LiveMeta | null>>({});
   const [metaLoadingMints, setMetaLoadingMints] = useState<Record<string, boolean>>({});
+
+  const effectivePfp = useMemo(() => {
+    // Preview should win (instant UX), otherwise stored URL
+    return pfpPreview || pfpUrl || profile?.pfp_url || "";
+  }, [pfpPreview, pfpUrl, profile?.pfp_url]);
 
   async function refresh() {
     setLoading(true);
@@ -81,6 +92,15 @@ export default function DevProfilePage() {
   useEffect(() => {
     refresh();
   }, []);
+
+  // cleanup preview object URL
+  useEffect(() => {
+    return () => {
+      if (pfpPreview && pfpPreview.startsWith("blob:")) {
+        URL.revokeObjectURL(pfpPreview);
+      }
+    };
+  }, [pfpPreview]);
 
   // ---- Coin meta fetching (same source as coin page: /api/coin-live) ----
   async function fetchCoinMeta(mint: string) {
@@ -188,6 +208,66 @@ export default function DevProfilePage() {
     window.location.href = "/";
   }
 
+  function openPicker() {
+    setPfpErr(null);
+    fileRef.current?.click();
+  }
+
+  async function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+    e.target.value = ""; // allow picking same file again later
+
+    if (!file) return;
+
+    // quick client-side sanity (server will enforce too)
+    if (!file.type.startsWith("image/")) {
+      setPfpErr("Please choose an image file.");
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setPfpErr("Image too large (max 2MB).");
+      return;
+    }
+
+    // preview instantly
+    const obj = URL.createObjectURL(file);
+    setPfpPreview((prev) => {
+      if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
+      return obj;
+    });
+
+    // upload to server
+    setPfpUploading(true);
+    setPfpErr(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+
+      const res = await fetch("/api/dev/pfp", {
+        method: "POST",
+        body: fd
+      });
+
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPfpErr(json?.error ?? "Failed to upload image");
+        return;
+      }
+
+      // store the new URL in state so Save Profile doesn't overwrite it
+      if (json?.pfp_url) {
+        setPfpUrl(String(json.pfp_url));
+      }
+
+      // refresh profile so everywhere gets new URL
+      await refresh();
+    } catch (err: any) {
+      setPfpErr(err?.message ?? "Failed to upload image");
+    } finally {
+      setPfpUploading(false);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-authswap text-white">
       <TopNav />
@@ -203,25 +283,62 @@ export default function DevProfilePage() {
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
               <h2 className="text-lg font-semibold">Profile</h2>
 
+              {/* Hidden file input (native picker) */}
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/*"
+                capture="user"
+                className="hidden"
+                onChange={onPickFile}
+              />
+
               <div className="mt-4 grid gap-3">
+                {/* Avatar picker row */}
+                <div className="flex items-center gap-4">
+                  <button
+                    type="button"
+                    onClick={openPicker}
+                    className="group relative h-16 w-16 overflow-hidden rounded-full border border-white/10 bg-black/30"
+                    aria-label="Change profile picture"
+                    title="Change profile picture"
+                    disabled={pfpUploading}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    {effectivePfp ? (
+                      <img src={effectivePfp} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-xs text-zinc-500">Add</div>
+                    )}
+
+                    <div className="pointer-events-none absolute inset-0 flex items-end justify-center bg-black/0 pb-1 text-[11px] text-white/0 transition group-hover:bg-black/40 group-hover:text-white/90">
+                      Change
+                    </div>
+                  </button>
+
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold">Profile picture</div>
+                    <div className="mt-1 text-xs text-zinc-400">
+                      {pfpUploading ? "Uploading…" : "Tap to choose from your device (camera roll / files)."}
+                    </div>
+                    {pfpErr ? <div className="mt-1 text-xs text-red-300">{pfpErr}</div> : null}
+                  </div>
+                </div>
+
                 <input
                   className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
                   placeholder="Display name"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
                 />
-                <input
-                  className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
-                  placeholder="Profile image URL (optional)"
-                  value={pfpUrl}
-                  onChange={(e) => setPfpUrl(e.target.value)}
-                />
+
                 <input
                   className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
                   placeholder="X/Twitter URL (optional)"
                   value={xUrl}
                   onChange={(e) => setXUrl(e.target.value)}
                 />
+
                 <textarea
                   className="min-h-[100px] rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
                   placeholder="Bio (optional)"
@@ -281,9 +398,7 @@ export default function DevProfilePage() {
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <h2 className="text-lg font-semibold">Coins</h2>
-                  <p className="mt-1 text-xs text-zinc-500">
-                    Coins you post are permanent and cannot be removed individually.
-                  </p>
+                  <p className="mt-1 text-xs text-zinc-500">Coins you post are permanent and cannot be removed individually.</p>
                 </div>
 
                 <span className="shrink-0 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
@@ -365,7 +480,9 @@ export default function DevProfilePage() {
 
                             <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
                             {c.description ? <div className="mt-1 text-xs text-zinc-300">{c.description}</div> : null}
-                            <div className="mt-2 text-[11px] text-zinc-500">{new Date(c.created_at).toLocaleString()}</div>
+                            <div className="mt-2 text-[11px] text-zinc-500">
+                              {new Date(c.created_at).toLocaleString()}
+                            </div>
                           </div>
                         </div>
 
