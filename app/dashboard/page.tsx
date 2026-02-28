@@ -32,6 +32,7 @@ type CoinMeta = {
 };
 
 type NameMap = Record<string, string>; // wallet -> display_name
+type PfpMap = Record<string, string | null>; // wallet -> signed pfp url (or null)
 
 function shortAddr(s: string) {
   if (!s) return "";
@@ -50,6 +51,9 @@ export default function DashboardPage() {
 
   // wallet -> display_name
   const [nameByWallet, setNameByWallet] = useState<NameMap>({});
+
+  // wallet -> signed pfp url
+  const [pfpByWallet, setPfpByWallet] = useState<PfpMap>({});
 
   useEffect(() => {
     fetch("/api/public/dashboard", { cache: "no-store" })
@@ -111,8 +115,13 @@ export default function DashboardPage() {
       if (c?.wallet) s.add(String(c.wallet));
     }
 
+    // trending devs list itself
+    for (const p of (data?.profiles ?? []) as any[]) {
+      if (p?.wallet) s.add(String(p.wallet));
+    }
+
     return Array.from(s);
-  }, [data?.posts, trendingCoins, following?.posts, following?.coins]);
+  }, [data?.posts, trendingCoins, following?.posts, following?.coins, data?.profiles]);
 
   // Resolve missing display_names via /api/public/dev/:wallet (cached in state)
   useEffect(() => {
@@ -163,6 +172,51 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletsToResolve.join("|")]);
 
+  // Resolve signed PFP URLs for wallets (private bucket)
+  useEffect(() => {
+    if (!walletsToResolve.length) return;
+
+    let cancelled = false;
+
+    async function run() {
+      const missing = walletsToResolve.filter((w) => !Object.prototype.hasOwnProperty.call(pfpByWallet, w));
+      if (missing.length === 0) return;
+
+      const batchSize = 8;
+
+      for (let i = 0; i < missing.length; i += batchSize) {
+        const chunk = missing.slice(i, i + batchSize);
+
+        const results = await Promise.allSettled(
+          chunk.map(async (wallet) => {
+            const res = await fetch(`/api/public/pfp?wallet=${encodeURIComponent(wallet)}`, { cache: "no-store" });
+            const json = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(json?.error || "pfp fetch failed");
+            return { wallet, url: (json?.url ?? null) as string | null };
+          })
+        );
+
+        if (cancelled) return;
+
+        const updates: PfpMap = {};
+        for (const r of results) {
+          if (r.status === "fulfilled") updates[r.value.wallet] = r.value.url;
+        }
+
+        if (Object.keys(updates).length) {
+          setPfpByWallet((prev) => ({ ...prev, ...updates }));
+        }
+      }
+    }
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walletsToResolve.join("|")]);
+
   function devLabel(wallet: string) {
     const name = nameByWallet[wallet];
     return name ? name : shortAddr(wallet);
@@ -171,6 +225,16 @@ export default function DashboardPage() {
   function devSub(wallet: string) {
     const name = nameByWallet[wallet];
     return name ? shortAddr(wallet) : null;
+  }
+
+  function DevAvatar({ wallet }: { wallet: string }) {
+    const url = pfpByWallet[wallet] ?? null;
+    return (
+      <div className="h-8 w-8 overflow-hidden rounded-full border border-white/10 bg-white/5 shrink-0">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        {url ? <img src={url} alt="" className="h-full w-full object-cover" /> : null}
+      </div>
+    );
   }
 
   const allMintsToHydrate = useMemo(() => {
@@ -268,17 +332,21 @@ export default function DashboardPage() {
                   ) : (
                     (following.posts ?? []).slice(0, 8).map((x: any) => (
                       <div key={x.id} className="rounded-xl border border-white/10 bg-black/30 p-3">
-                        <Link
-                          href={`/dev/${encodeURIComponent(x.wallet)}`}
-                          className="text-sm font-semibold text-zinc-200 hover:text-white"
-                          title={x.wallet}
-                        >
-                          {devLabel(x.wallet)}
-                        </Link>
-
-                        {devSub(x.wallet) ? (
-                          <div className="mt-0.5 font-mono text-[11px] text-zinc-500">{devSub(x.wallet)}</div>
-                        ) : null}
+                        <div className="flex items-center gap-2">
+                          <DevAvatar wallet={x.wallet} />
+                          <div className="min-w-0">
+                            <Link
+                              href={`/dev/${encodeURIComponent(x.wallet)}`}
+                              className="text-sm font-semibold text-zinc-200 hover:text-white"
+                              title={x.wallet}
+                            >
+                              {devLabel(x.wallet)}
+                            </Link>
+                            {devSub(x.wallet) ? (
+                              <div className="mt-0.5 font-mono text-[11px] text-zinc-500">{devSub(x.wallet)}</div>
+                            ) : null}
+                          </div>
+                        </div>
 
                         <div className="mt-2 text-sm text-zinc-200">{x.content}</div>
                       </div>
@@ -320,17 +388,20 @@ export default function DashboardPage() {
 
                                 <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
 
-                                <div className="mt-1 text-xs text-zinc-500">
-                                  by{" "}
-                                  <Link
-                                    href={`/dev/${encodeURIComponent(c.wallet)}`}
-                                    className="hover:text-white"
-                                    title={c.wallet}
-                                  >
-                                    {devLabel(c.wallet)}
-                                  </Link>
+                                <div className="mt-2 flex items-center gap-2 text-xs text-zinc-500">
+                                  <DevAvatar wallet={c.wallet} />
+                                  <span>
+                                    by{" "}
+                                    <Link
+                                      href={`/dev/${encodeURIComponent(c.wallet)}`}
+                                      className="hover:text-white"
+                                      title={c.wallet}
+                                    >
+                                      {devLabel(c.wallet)}
+                                    </Link>
+                                  </span>
                                   {devSub(c.wallet) ? (
-                                    <span className="ml-2 font-mono text-[11px] text-zinc-600">{devSub(c.wallet)}</span>
+                                    <span className="ml-1 font-mono text-[11px] text-zinc-600">{devSub(c.wallet)}</span>
                                   ) : null}
                                 </div>
                               </div>
@@ -377,7 +448,9 @@ export default function DashboardPage() {
                       <div className="flex items-center gap-3">
                         <div className="h-10 w-10 overflow-hidden rounded-full border border-white/10 bg-white/5">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                          {p.pfp_url ? <img src={p.pfp_url} alt="" className="h-full w-full object-cover" /> : null}
+                          {pfpByWallet[p.wallet] ? (
+                            <img src={pfpByWallet[p.wallet] as string} alt="" className="h-full w-full object-cover" />
+                          ) : null}
                         </div>
                         <div className="min-w-0">
                           <div className="truncate text-sm font-semibold">{p.display_name}</div>
@@ -399,17 +472,21 @@ export default function DashboardPage() {
                 ) : (
                   (data.posts ?? []).slice(0, 10).map((x: any) => (
                     <div key={x.id} className="rounded-xl border border-white/10 bg-black/30 p-4">
-                      <Link
-                        href={`/dev/${encodeURIComponent(x.wallet)}`}
-                        className="text-sm font-semibold text-zinc-200 hover:text-white"
-                        title={x.wallet}
-                      >
-                        {devLabel(x.wallet)}
-                      </Link>
-
-                      {devSub(x.wallet) ? (
-                        <div className="mt-0.5 font-mono text-[11px] text-zinc-500">{devSub(x.wallet)}</div>
-                      ) : null}
+                      <div className="flex items-center gap-2">
+                        <DevAvatar wallet={x.wallet} />
+                        <div className="min-w-0">
+                          <Link
+                            href={`/dev/${encodeURIComponent(x.wallet)}`}
+                            className="text-sm font-semibold text-zinc-200 hover:text-white"
+                            title={x.wallet}
+                          >
+                            {devLabel(x.wallet)}
+                          </Link>
+                          {devSub(x.wallet) ? (
+                            <div className="mt-0.5 font-mono text-[11px] text-zinc-500">{devSub(x.wallet)}</div>
+                          ) : null}
+                        </div>
+                      </div>
 
                       <div className="mt-2 text-sm text-zinc-200">{x.content}</div>
                     </div>
@@ -470,17 +547,20 @@ export default function DashboardPage() {
 
                               {c.description ? <div className="mt-2 text-xs text-zinc-300">{c.description}</div> : null}
 
-                              <div className="mt-2 text-xs text-zinc-500">
-                                Posted by{" "}
-                                <Link
-                                  href={`/dev/${encodeURIComponent(c.dev_wallet)}`}
-                                  className="hover:text-white"
-                                  title={c.dev_wallet}
-                                >
-                                  {devLabel(c.dev_wallet)}
-                                </Link>
+                              <div className="mt-2 flex items-center gap-2 text-xs text-zinc-500">
+                                <DevAvatar wallet={c.dev_wallet} />
+                                <span>
+                                  Posted by{" "}
+                                  <Link
+                                    href={`/dev/${encodeURIComponent(c.dev_wallet)}`}
+                                    className="hover:text-white"
+                                    title={c.dev_wallet}
+                                  >
+                                    {devLabel(c.dev_wallet)}
+                                  </Link>
+                                </span>
                                 {devSub(c.dev_wallet) ? (
-                                  <span className="ml-2 font-mono text-[11px] text-zinc-600">{devSub(c.dev_wallet)}</span>
+                                  <span className="ml-1 font-mono text-[11px] text-zinc-600">{devSub(c.dev_wallet)}</span>
                                 ) : null}
                               </div>
                             </div>
