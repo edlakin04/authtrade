@@ -31,6 +31,9 @@ type Live = {
   symbol: string | null;
   image: string | null;
 
+  // some dex pairs include image under different keys; we support fallback
+  dexImage?: string | null;
+
   priceUsd: number | null;
   liquidityUsd: number | null;
   marketCapUsd: number | null;
@@ -97,6 +100,11 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
   function devLabel(wallet: string) {
     return devName || shortAddr(wallet);
   }
+
+  // ✅ This is the only UI change: prefer live.image, then live.dexImage, else show a placeholder
+  const logoUrl = useMemo(() => {
+    return (live?.image || live?.dexImage || null) as string | null;
+  }, [live?.image, live?.dexImage]);
 
   async function loadCoin(id: string) {
     setLoading(true);
@@ -203,7 +211,10 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
       const res = await fetch(`/api/coin-live?mint=${encodeURIComponent(m)}`, { cache: "no-store" });
       const json = await res.json().catch(() => null);
       if (!res.ok) throw new Error(json?.error || "Failed to load live data");
-      setLive(json as Live);
+
+      // Allow fallback logo key if the API adds it later
+      const out = json as Live;
+      setLive(out);
     } catch (e: any) {
       setLiveErr(e?.message ?? "Failed to load live data");
     } finally {
@@ -271,7 +282,13 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
                 <div className="flex items-center gap-4">
                   <div className="h-14 w-14 overflow-hidden rounded-2xl border border-white/10 bg-black/30">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    {live?.image ? <img src={live.image} alt="" className="h-full w-full object-cover" /> : null}
+                    {logoUrl ? (
+                      <img src={logoUrl} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-[10px] text-zinc-500">
+                        No logo
+                      </div>
+                    )}
                   </div>
 
                   <div className="min-w-0">
