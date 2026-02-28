@@ -1,12 +1,27 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import TopNav from "@/components/TopNav";
 import Link from "next/link";
+
+type Meta = {
+  name: string | null;
+  symbol: string | null;
+  image: string | null;
+};
+
+function initials(name: string) {
+  const n = (name || "").trim();
+  if (!n) return "?";
+  const parts = n.split(/\s+/).slice(0, 2);
+  return parts.map((p) => p.slice(0, 1).toUpperCase()).join("");
+}
 
 export default function DashboardPage() {
   const [data, setData] = useState<any>(null);
   const [following, setFollowing] = useState<any>(null);
+
+  const [metaByMint, setMetaByMint] = useState<Record<string, Meta>>({});
 
   useEffect(() => {
     fetch("/api/public/dashboard")
@@ -19,6 +34,77 @@ export default function DashboardPage() {
       .then(setFollowing)
       .catch(() => setFollowing({ error: "Failed to load following feed" }));
   }, []);
+
+  const allMints = useMemo(() => {
+    const m: string[] = [];
+
+    for (const c of (data?.coins ?? []) as any[]) {
+      if (c?.token_address) m.push(String(c.token_address));
+    }
+
+    for (const c of (following?.coins ?? []) as any[]) {
+      if (c?.token_address) m.push(String(c.token_address));
+    }
+
+    return Array.from(new Set(m)).slice(0, 50);
+  }, [data, following]);
+
+  useEffect(() => {
+    if (allMints.length === 0) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await fetch(`/api/coin-live/batch?mints=${encodeURIComponent(allMints.join(","))}`, {
+          cache: "no-store"
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok) return;
+
+        if (!cancelled && json?.byMint) {
+          setMetaByMint((prev) => ({ ...prev, ...(json.byMint as Record<string, Meta>) }));
+        }
+      } catch {
+        // ignore
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [allMints]);
+
+  function renderCoinIdentity(tokenAddress: string, fallbackTitle?: string | null) {
+    const meta = metaByMint[tokenAddress];
+    const displayName = meta?.name || fallbackTitle || "Untitled coin";
+    const symbol = meta?.symbol;
+
+    return (
+      <div className="flex items-center gap-3">
+        <div className="h-9 w-9 overflow-hidden rounded-xl border border-white/10 bg-black/30 flex items-center justify-center">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          {meta?.image ? (
+            <img src={meta.image} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <span className="text-[11px] text-zinc-300">{initials(symbol || displayName)}</span>
+          )}
+        </div>
+
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="truncate text-sm font-semibold">{displayName}</div>
+            {symbol ? (
+              <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[10px] text-zinc-300">
+                {symbol}
+              </span>
+            ) : null}
+          </div>
+          <div className="mt-1 break-all font-mono text-xs text-zinc-400">{tokenAddress}</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-authswap text-white">
@@ -74,8 +160,7 @@ export default function DashboardPage() {
                       <div key={c.id} className="rounded-xl border border-white/10 bg-black/30 p-3">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <div className="text-sm font-semibold">{c.title ?? "Untitled coin"}</div>
-                            <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
+                            {renderCoinIdentity(String(c.token_address), c.title ?? null)}
                             <div className="mt-1 text-xs text-zinc-500">
                               by{" "}
                               <Link href={`/dev/${c.wallet}`} className="hover:text-white">
@@ -166,8 +251,7 @@ export default function DashboardPage() {
                     <div key={c.id} className="rounded-xl border border-white/10 bg-black/30 p-4">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="text-sm font-semibold">{c.title ?? "Untitled coin"}</div>
-                          <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
+                          {renderCoinIdentity(String(c.token_address), c.title ?? null)}
                           <div className="mt-1 text-xs text-zinc-500">
                             Posted by{" "}
                             <Link href={`/dev/${c.wallet}`} className="hover:text-white">
