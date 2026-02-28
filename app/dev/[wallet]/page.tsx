@@ -57,7 +57,6 @@ function shortWallet(w: string) {
 }
 
 function Stars({ value }: { value: number }) {
-  // value can be 1-5 integer OR avg like 4.23
   const full = Math.floor(value);
   const frac = value - full;
 
@@ -66,7 +65,7 @@ function Stars({ value }: { value: number }) {
       {Array.from({ length: 5 }).map((_, i) => {
         const idx = i + 1;
         const isFull = idx <= full;
-        const isHalf = !isFull && idx === full + 1 && frac >= 0.25; // simple visual
+        const isHalf = !isFull && idx === full + 1 && frac >= 0.25;
 
         return (
           <span
@@ -119,11 +118,7 @@ function StarPicker({
   );
 }
 
-export default function DevPublicPage({
-  params
-}: {
-  params: Promise<{ wallet: string }>;
-}) {
+export default function DevPublicPage({ params }: { params: Promise<{ wallet: string }> }) {
   const [devWallet, setDevWallet] = useState<string>("");
 
   const [data, setData] = useState<DevPayload | null>(null);
@@ -274,7 +269,6 @@ export default function DevPublicPage({
     const m = (mint || "").trim();
     if (!m) return;
 
-    // already fetched (even if null)
     if (Object.prototype.hasOwnProperty.call(metaByMint, m)) return;
 
     setMetaLoadingMints((prev) => ({ ...prev, [m]: true }));
@@ -296,8 +290,6 @@ export default function DevPublicPage({
 
   async function fetchCoinMetaBatched(mints: string[], batchSize = 6) {
     const uniq = Array.from(new Set(mints.filter(Boolean).map((x) => x.trim())));
-
-    // only those we don't already have
     const need = uniq.filter((m) => !Object.prototype.hasOwnProperty.call(metaByMint, m));
     if (need.length === 0) return;
 
@@ -307,7 +299,6 @@ export default function DevPublicPage({
     }
   }
 
-  // When dev coins load, fetch metadata for visible ones
   useEffect(() => {
     if (!data?.coins?.length) return;
     const visible = data.coins.slice(0, 30).map((c) => c.token_address);
@@ -546,9 +537,7 @@ export default function DevPublicPage({
                                       {symbol}
                                     </span>
                                   ) : null}
-                                  {loadingMeta ? (
-                                    <span className="text-[11px] text-zinc-500">Loading…</span>
-                                  ) : null}
+                                  {loadingMeta ? <span className="text-[11px] text-zinc-500">Loading…</span> : null}
                                 </div>
 
                                 <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
@@ -574,19 +563,6 @@ export default function DevPublicPage({
                     })
                   )}
                 </div>
-
-                {data.coins.length > 0 ? (
-                  <button
-                    onClick={() => {
-                      // manual refresh (useful if logos appear later)
-                      const visible = data.coins.slice(0, 30).map((x) => x.token_address);
-                      fetchCoinMetaBatched(visible, 6);
-                    }}
-                    className="mt-3 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10"
-                  >
-                    Refresh coin logos
-                  </button>
-                ) : null}
               </section>
             </div>
           </>
