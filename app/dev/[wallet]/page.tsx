@@ -43,6 +43,14 @@ type ReviewsPayload = {
   }>;
 };
 
+type LiveMeta = {
+  ok: true;
+  mint: string;
+  name: string | null;
+  symbol: string | null;
+  image: string | null;
+};
+
 function shortWallet(w: string) {
   if (!w) return "";
   return w.slice(0, 4) + "…" + w.slice(-4);
@@ -131,6 +139,10 @@ export default function DevPublicPage({
   const [myRating, setMyRating] = useState<number>(5);
   const [myComment, setMyComment] = useState<string>("");
   const [submitBusy, setSubmitBusy] = useState(false);
+
+  // Coin metadata (name/symbol/logo) keyed by mint
+  const [metaByMint, setMetaByMint] = useState<Record<string, LiveMeta | null>>({});
+  const [metaLoadingMints, setMetaLoadingMints] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     (async () => {
@@ -250,13 +262,58 @@ export default function DevPublicPage({
         return;
       }
 
-      // Refresh reviews to update avg/count + show your latest
       await loadReviews(devWallet);
       alert("Review saved.");
     } finally {
       setSubmitBusy(false);
     }
   }
+
+  // ---- Coin meta fetching (same data source as coin page: /api/coin-live) ----
+  async function fetchCoinMeta(mint: string) {
+    const m = (mint || "").trim();
+    if (!m) return;
+
+    // already fetched (even if null)
+    if (Object.prototype.hasOwnProperty.call(metaByMint, m)) return;
+
+    setMetaLoadingMints((prev) => ({ ...prev, [m]: true }));
+    try {
+      const res = await fetch(`/api/coin-live?mint=${encodeURIComponent(m)}`, { cache: "no-store" });
+      const json = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        setMetaByMint((prev) => ({ ...prev, [m]: null }));
+        return;
+      }
+
+      const meta = json as LiveMeta;
+      setMetaByMint((prev) => ({ ...prev, [m]: meta }));
+    } finally {
+      setMetaLoadingMints((prev) => ({ ...prev, [m]: false }));
+    }
+  }
+
+  async function fetchCoinMetaBatched(mints: string[], batchSize = 6) {
+    const uniq = Array.from(new Set(mints.filter(Boolean).map((x) => x.trim())));
+
+    // only those we don't already have
+    const need = uniq.filter((m) => !Object.prototype.hasOwnProperty.call(metaByMint, m));
+    if (need.length === 0) return;
+
+    for (let i = 0; i < need.length; i += batchSize) {
+      const chunk = need.slice(i, i + batchSize);
+      await Promise.allSettled(chunk.map((m) => fetchCoinMeta(m)));
+    }
+  }
+
+  // When dev coins load, fetch metadata for visible ones
+  useEffect(() => {
+    if (!data?.coins?.length) return;
+    const visible = data.coins.slice(0, 30).map((c) => c.token_address);
+    fetchCoinMetaBatched(visible, 6);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.coins]);
 
   const avg = reviews?.avgRating ?? null;
   const count = reviews?.count ?? 0;
@@ -327,9 +384,7 @@ export default function DevPublicPage({
                 {/* Rating summary */}
                 <div className="rounded-2xl border border-white/10 bg-black/25 px-4 py-3">
                   <div className="flex items-center gap-2">
-                    <div className="text-2xl font-semibold">
-                      {avg == null ? "—" : avg.toFixed(2)}
-                    </div>
+                    <div className="text-2xl font-semibold">{avg == null ? "—" : avg.toFixed(2)}</div>
                     <div>
                       <Stars value={avg ?? 0} />
                       <div className="mt-1 text-xs text-zinc-400">
@@ -366,9 +421,7 @@ export default function DevPublicPage({
                     reviews.reviews.slice(0, 12).map((r) => (
                       <div key={r.id} className="rounded-xl border border-white/10 bg-black/30 p-4">
                         <div className="flex items-center justify-between gap-3">
-                          <div className="text-xs text-zinc-400 font-mono">
-                            {shortWallet(r.reviewer_wallet)}
-                          </div>
+                          <div className="text-xs text-zinc-400 font-mono">{shortWallet(r.reviewer_wallet)}</div>
                           <Stars value={Number(r.rating) || 0} />
                         </div>
                         {r.comment ? (
@@ -376,9 +429,7 @@ export default function DevPublicPage({
                         ) : (
                           <div className="mt-2 text-sm text-zinc-500">No comment.</div>
                         )}
-                        <div className="mt-2 text-[11px] text-zinc-500">
-                          {new Date(r.created_at).toLocaleString()}
-                        </div>
+                        <div className="mt-2 text-[11px] text-zinc-500">{new Date(r.created_at).toLocaleString()}</div>
                       </div>
                     ))
                   ) : (
@@ -399,34 +450,32 @@ export default function DevPublicPage({
                     You can’t review yourself.
                   </div>
                 ) : (
-                  <>
-                    <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="text-sm text-zinc-200">Your rating</div>
-                        <StarPicker value={myRating} onChange={setMyRating} disabled={submitBusy} />
-                      </div>
-
-                      <textarea
-                        className="mt-3 min-h-[110px] w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
-                        placeholder="Share your experience (optional)…"
-                        value={myComment}
-                        onChange={(e) => setMyComment(e.target.value)}
-                        maxLength={2000}
-                      />
-
-                      <button
-                        onClick={submitReview}
-                        disabled={submitBusy}
-                        className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
-                      >
-                        {submitBusy ? "Saving…" : "Submit review"}
-                      </button>
-
-                      <p className="mt-2 text-xs text-zinc-500">
-                        One review per wallet. Submitting again updates your existing review.
-                      </p>
+                  <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm text-zinc-200">Your rating</div>
+                      <StarPicker value={myRating} onChange={setMyRating} disabled={submitBusy} />
                     </div>
-                  </>
+
+                    <textarea
+                      className="mt-3 min-h-[110px] w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
+                      placeholder="Share your experience (optional)…"
+                      value={myComment}
+                      onChange={(e) => setMyComment(e.target.value)}
+                      maxLength={2000}
+                    />
+
+                    <button
+                      onClick={submitReview}
+                      disabled={submitBusy}
+                      className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+                    >
+                      {submitBusy ? "Saving…" : "Submit review"}
+                    </button>
+
+                    <p className="mt-2 text-xs text-zinc-500">
+                      One review per wallet. Submitting again updates your existing review.
+                    </p>
+                  </div>
                 )}
               </section>
             </div>
@@ -450,25 +499,94 @@ export default function DevPublicPage({
               </section>
 
               <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
-                <h2 className="text-lg font-semibold">Coins</h2>
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-lg font-semibold">Coins</h2>
+                  <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] text-zinc-300">
+                    Permanent
+                  </span>
+                </div>
+
                 <div className="mt-4 space-y-2">
                   {data.coins.length === 0 ? (
                     <div className="text-sm text-zinc-500">No coins yet.</div>
                   ) : (
-                    data.coins.slice(0, 30).map((c) => (
-                      <div key={c.id} className="rounded-xl border border-white/10 bg-black/30 p-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="text-sm font-semibold">{c.title ?? "Untitled coin"}</div>
-                          <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] text-zinc-300">
-                            Permanent
-                          </span>
-                        </div>
-                        <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
-                        {c.description ? <div className="mt-2 text-xs text-zinc-300">{c.description}</div> : null}
-                      </div>
-                    ))
+                    data.coins.slice(0, 30).map((c) => {
+                      const mint = c.token_address;
+                      const meta = metaByMint[mint];
+                      const loadingMeta = !!metaLoadingMints[mint];
+
+                      const displayName = meta?.name || c.title || "Coin";
+                      const symbol = meta?.symbol || null;
+                      const logo = meta?.image || null;
+
+                      return (
+                        <Link
+                          key={c.id}
+                          href={`/coin/${encodeURIComponent(c.id)}`}
+                          className="block rounded-xl border border-white/10 bg-black/30 p-4 hover:bg-black/40 transition"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex min-w-0 items-start gap-3">
+                              <div className="h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-white/5">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                {logo ? (
+                                  <img src={logo} alt="" className="h-full w-full object-cover" />
+                                ) : (
+                                  <div className="flex h-full w-full items-center justify-center text-xs text-zinc-500">
+                                    {loadingMeta ? "…" : "⎔"}
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <div className="truncate text-sm font-semibold">{displayName}</div>
+                                  {symbol ? (
+                                    <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[11px] text-zinc-300">
+                                      {symbol}
+                                    </span>
+                                  ) : null}
+                                  {loadingMeta ? (
+                                    <span className="text-[11px] text-zinc-500">Loading…</span>
+                                  ) : null}
+                                </div>
+
+                                <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
+
+                                {c.description ? (
+                                  <div className="mt-2 line-clamp-2 text-xs text-zinc-300">{c.description}</div>
+                                ) : null}
+
+                                <div className="mt-2 text-[11px] text-zinc-500">
+                                  {new Date(c.created_at).toLocaleString()}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="shrink-0">
+                              <span className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs hover:bg-white/10">
+                                Open →
+                              </span>
+                            </div>
+                          </div>
+                        </Link>
+                      );
+                    })
                   )}
                 </div>
+
+                {data.coins.length > 0 ? (
+                  <button
+                    onClick={() => {
+                      // manual refresh (useful if logos appear later)
+                      const visible = data.coins.slice(0, 30).map((x) => x.token_address);
+                      fetchCoinMetaBatched(visible, 6);
+                    }}
+                    className="mt-3 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10"
+                  >
+                    Refresh coin logos
+                  </button>
+                ) : null}
               </section>
             </div>
           </>
