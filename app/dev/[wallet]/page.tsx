@@ -125,6 +125,9 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Signed PFP URL (private bucket)
+  const [pfpUrl, setPfpUrl] = useState<string | null>(null);
+
   // Reviews state
   const [reviews, setReviews] = useState<ReviewsPayload | null>(null);
   const [reviewsErr, setReviewsErr] = useState<string | null>(null);
@@ -148,6 +151,22 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
 
   const shortDevWallet = useMemo(() => shortWallet(devWallet), [devWallet]);
 
+  async function loadPfp(wallet: string) {
+    const w = (wallet || "").trim();
+    if (!w) return;
+    try {
+      const res = await fetch(`/api/public/pfp?wallet=${encodeURIComponent(w)}`, { cache: "no-store" });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setPfpUrl(null);
+        return;
+      }
+      setPfpUrl((json?.url ?? null) as string | null);
+    } catch {
+      setPfpUrl(null);
+    }
+  }
+
   async function loadDev(wallet: string) {
     setErr(null);
     const res = await fetch(`/api/public/dev/${encodeURIComponent(wallet)}`, { cache: "no-store" });
@@ -160,6 +179,9 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
     }
 
     setData(json);
+
+    // also refresh signed avatar (private bucket)
+    await loadPfp(wallet);
   }
 
   async function loadReviews(wallet: string) {
@@ -185,6 +207,7 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
     if (!devWallet) return;
     loadDev(devWallet);
     loadReviews(devWallet);
+    loadPfp(devWallet);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [devWallet]);
 
@@ -351,9 +374,7 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
                 <div className="flex items-center gap-4">
                   <div className="h-14 w-14 overflow-hidden rounded-full border border-white/10 bg-white/5">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    {data.profile.pfp_url ? (
-                      <img src={data.profile.pfp_url} alt="" className="h-full w-full object-cover" />
-                    ) : null}
+                    {pfpUrl ? <img src={pfpUrl} alt="" className="h-full w-full object-cover" /> : null}
                   </div>
 
                   <div className="min-w-0">
@@ -490,13 +511,7 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
               </section>
 
               <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
-                <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-lg font-semibold">Coins</h2>
-                  <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] text-zinc-300">
-                    Permanent
-                  </span>
-                </div>
-
+                <h2 className="text-lg font-semibold">Coins</h2>
                 <div className="mt-4 space-y-2">
                   {data.coins.length === 0 ? (
                     <div className="text-sm text-zinc-500">No coins yet.</div>
@@ -506,16 +521,12 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
                       const meta = metaByMint[mint];
                       const loadingMeta = !!metaLoadingMints[mint];
 
-                      const displayName = meta?.name || c.title || "Coin";
+                      const displayName = meta?.name || c.title || "Untitled coin";
                       const symbol = meta?.symbol || null;
                       const logo = meta?.image || null;
 
                       return (
-                        <Link
-                          key={c.id}
-                          href={`/coin/${encodeURIComponent(c.id)}`}
-                          className="block rounded-xl border border-white/10 bg-black/30 p-4 hover:bg-black/40 transition"
-                        >
+                        <div key={c.id} className="rounded-xl border border-white/10 bg-black/30 p-4">
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex min-w-0 items-start gap-3">
                               <div className="h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-white/5">
@@ -531,21 +542,20 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
 
                               <div className="min-w-0">
                                 <div className="flex flex-wrap items-center gap-2">
-                                  <div className="truncate text-sm font-semibold">{displayName}</div>
+                                  <div className="text-sm font-semibold">{displayName}</div>
                                   {symbol ? (
-                                    <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[11px] text-zinc-300">
+                                    <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] text-zinc-300">
                                       {symbol}
                                     </span>
                                   ) : null}
                                   {loadingMeta ? <span className="text-[11px] text-zinc-500">Loading…</span> : null}
+                                  <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] text-zinc-300">
+                                    Permanent
+                                  </span>
                                 </div>
 
                                 <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
-
-                                {c.description ? (
-                                  <div className="mt-2 line-clamp-2 text-xs text-zinc-300">{c.description}</div>
-                                ) : null}
-
+                                {c.description ? <div className="mt-2 text-xs text-zinc-300">{c.description}</div> : null}
                                 <div className="mt-2 text-[11px] text-zinc-500">
                                   {new Date(c.created_at).toLocaleString()}
                                 </div>
@@ -553,12 +563,15 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
                             </div>
 
                             <div className="shrink-0">
-                              <span className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs hover:bg-white/10">
+                              <Link
+                                href={`/coin/${encodeURIComponent(c.id)}`}
+                                className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs hover:bg-white/10"
+                              >
                                 Open →
-                              </span>
+                              </Link>
                             </div>
                           </div>
-                        </Link>
+                        </div>
                       );
                     })
                   )}
