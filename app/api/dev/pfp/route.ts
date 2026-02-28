@@ -5,7 +5,7 @@ import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-const MAX_BYTES = 2 * 1024 * 1024; // 2MB
+const MAX_BYTES = 5 * 1024 * 1024; // 5MB
 const ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 function extFromType(type: string) {
@@ -48,7 +48,7 @@ export async function POST(req: Request) {
     }
 
     if (file.size > MAX_BYTES) {
-      return NextResponse.json({ error: "File too large (max 2MB)" }, { status: 400 });
+      return NextResponse.json({ error: "File too large (max 5MB)" }, { status: 400 });
     }
 
     const ext = extFromType(file.type);
