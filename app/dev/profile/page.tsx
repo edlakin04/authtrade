@@ -1,13 +1,14 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import TopNav from "@/components/TopNav";
 
 type Profile = {
   wallet: string;
   display_name: string;
   bio: string | null;
-  pfp_url: string | null;
+  pfp_url: string | null; // legacy (unused)
+  pfp_path?: string | null; // new
   x_url: string | null;
 };
 
@@ -42,7 +43,6 @@ export default function DevProfilePage() {
 
   const [displayName, setDisplayName] = useState("");
   const [bio, setBio] = useState("");
-  const [pfpUrl, setPfpUrl] = useState(""); // stored URL (from Supabase)
   const [xUrl, setXUrl] = useState("");
 
   const [postContent, setPostContent] = useState("");
@@ -51,20 +51,16 @@ export default function DevProfilePage() {
   const [coinTitle, setCoinTitle] = useState("");
   const [coinDesc, setCoinDesc] = useState("");
 
-  // PFP picker/upload state
-  const fileRef = useRef<HTMLInputElement | null>(null);
+  // Signed PFP url for previewing current avatar
+  const [pfpSignedUrl, setPfpSignedUrl] = useState<string | null>(null);
+
+  // Upload state
+  const [pfpFile, setPfpFile] = useState<File | null>(null);
   const [pfpUploading, setPfpUploading] = useState(false);
-  const [pfpErr, setPfpErr] = useState<string | null>(null);
-  const [pfpPreview, setPfpPreview] = useState<string | null>(null);
 
   // Coin metadata (name/symbol/logo) keyed by mint
   const [metaByMint, setMetaByMint] = useState<Record<string, LiveMeta | null>>({});
   const [metaLoadingMints, setMetaLoadingMints] = useState<Record<string, boolean>>({});
-
-  const effectivePfp = useMemo(() => {
-    // Preview should win (instant UX), otherwise stored URL
-    return pfpPreview || pfpUrl || profile?.pfp_url || "";
-  }, [pfpPreview, pfpUrl, profile?.pfp_url]);
 
   async function refresh() {
     setLoading(true);
@@ -84,23 +80,24 @@ export default function DevProfilePage() {
     if (data.profile) {
       setDisplayName(data.profile.display_name ?? "");
       setBio(data.profile.bio ?? "");
-      setPfpUrl(data.profile.pfp_url ?? "");
       setXUrl(data.profile.x_url ?? "");
+    }
+
+    // Fetch signed url for current wallet’s pfp
+    const w = data?.profile?.wallet;
+    if (w) {
+      const p = await fetch(`/api/public/pfp?wallet=${encodeURIComponent(w)}`, { cache: "no-store" })
+        .then((r) => r.json())
+        .catch(() => null);
+      setPfpSignedUrl(p?.url ?? null);
+    } else {
+      setPfpSignedUrl(null);
     }
   }
 
   useEffect(() => {
     refresh();
   }, []);
-
-  // cleanup preview object URL
-  useEffect(() => {
-    return () => {
-      if (pfpPreview && pfpPreview.startsWith("blob:")) {
-        URL.revokeObjectURL(pfpPreview);
-      }
-    };
-  }, [pfpPreview]);
 
   // ---- Coin meta fetching (same source as coin page: /api/coin-live) ----
   async function fetchCoinMeta(mint: string) {
@@ -136,7 +133,6 @@ export default function DevProfilePage() {
     }
   }
 
-  // When coins load/change, pull logo/name/symbol for the visible set
   useEffect(() => {
     if (!coins?.length) return;
     const visible = coins.slice(0, 50).map((c) => c.token_address);
@@ -151,8 +147,8 @@ export default function DevProfilePage() {
       body: JSON.stringify({
         display_name: displayName,
         bio,
-        pfp_url: pfpUrl || null,
         x_url: xUrl || null
+        // NOTE: no pfp_url here anymore (private storage + signed urls)
       })
     });
 
@@ -160,6 +156,27 @@ export default function DevProfilePage() {
     if (!res.ok) return alert(data?.error ?? "Save failed");
 
     await refresh();
+  }
+
+  async function uploadPfp() {
+    if (!pfpFile) return;
+    setPfpUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", pfpFile);
+
+      const res = await fetch("/api/dev/pfp", { method: "POST", body: fd });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(json?.error ?? "Upload failed");
+        return;
+      }
+
+      setPfpFile(null);
+      await refresh();
+    } finally {
+      setPfpUploading(false);
+    }
   }
 
   async function createPost() {
@@ -208,65 +225,16 @@ export default function DevProfilePage() {
     window.location.href = "/";
   }
 
-  function openPicker() {
-    setPfpErr(null);
-    fileRef.current?.click();
-  }
+  const localPreview = useMemo(() => {
+    if (!pfpFile) return null;
+    return URL.createObjectURL(pfpFile);
+  }, [pfpFile]);
 
-  async function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0] ?? null;
-    e.target.value = ""; // allow picking same file again later
-
-    if (!file) return;
-
-    // quick client-side sanity (server will enforce too)
-    if (!file.type.startsWith("image/")) {
-      setPfpErr("Please choose an image file.");
-      return;
-    }
-    if (file.size > 2 * 1024 * 1024) {
-      setPfpErr("Image too large (max 2MB).");
-      return;
-    }
-
-    // preview instantly
-    const obj = URL.createObjectURL(file);
-    setPfpPreview((prev) => {
-      if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
-      return obj;
-    });
-
-    // upload to server
-    setPfpUploading(true);
-    setPfpErr(null);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-
-      const res = await fetch("/api/dev/pfp", {
-        method: "POST",
-        body: fd
-      });
-
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setPfpErr(json?.error ?? "Failed to upload image");
-        return;
-      }
-
-      // store the new URL in state so Save Profile doesn't overwrite it
-      if (json?.pfp_url) {
-        setPfpUrl(String(json.pfp_url));
-      }
-
-      // refresh profile so everywhere gets new URL
-      await refresh();
-    } catch (err: any) {
-      setPfpErr(err?.message ?? "Failed to upload image");
-    } finally {
-      setPfpUploading(false);
-    }
-  }
+  useEffect(() => {
+    return () => {
+      if (localPreview) URL.revokeObjectURL(localPreview);
+    };
+  }, [localPreview]);
 
   return (
     <main className="min-h-screen bg-authswap text-white">
@@ -283,62 +251,74 @@ export default function DevProfilePage() {
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
               <h2 className="text-lg font-semibold">Profile</h2>
 
-              {/* Hidden file input (native picker) */}
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/*"
-                capture="user"
-                className="hidden"
-                onChange={onPickFile}
-              />
-
-              <div className="mt-4 grid gap-3">
-                {/* Avatar picker row */}
+              {/* Avatar upload */}
+              <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4">
                 <div className="flex items-center gap-4">
-                  <button
-                    type="button"
-                    onClick={openPicker}
-                    className="group relative h-16 w-16 overflow-hidden rounded-full border border-white/10 bg-black/30"
-                    aria-label="Change profile picture"
-                    title="Change profile picture"
-                    disabled={pfpUploading}
-                  >
+                  <div className="h-14 w-14 overflow-hidden rounded-full border border-white/10 bg-white/5">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    {effectivePfp ? (
-                      <img src={effectivePfp} alt="" className="h-full w-full object-cover" />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-xs text-zinc-500">Add</div>
-                    )}
-
-                    <div className="pointer-events-none absolute inset-0 flex items-end justify-center bg-black/0 pb-1 text-[11px] text-white/0 transition group-hover:bg-black/40 group-hover:text-white/90">
-                      Change
-                    </div>
-                  </button>
+                    {(localPreview || pfpSignedUrl) ? (
+                      <img
+                        src={localPreview || pfpSignedUrl || ""}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    ) : null}
+                  </div>
 
                   <div className="min-w-0">
                     <div className="text-sm font-semibold">Profile picture</div>
                     <div className="mt-1 text-xs text-zinc-400">
-                      {pfpUploading ? "Uploading…" : "Tap to choose from your device (camera roll / files)."}
+                      JPG / PNG / WEBP • max 2MB
                     </div>
-                    {pfpErr ? <div className="mt-1 text-xs text-red-300">{pfpErr}</div> : null}
+
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <label className="cursor-pointer rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10">
+                        Choose photo
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp,image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0] || null;
+                            setPfpFile(f);
+                          }}
+                        />
+                      </label>
+
+                      <button
+                        onClick={uploadPfp}
+                        disabled={!pfpFile || pfpUploading}
+                        className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+                      >
+                        {pfpUploading ? "Uploading…" : "Upload"}
+                      </button>
+
+                      {pfpFile ? (
+                        <button
+                          onClick={() => setPfpFile(null)}
+                          className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10"
+                        >
+                          Cancel
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
+              </div>
 
+              <div className="mt-4 grid gap-3">
                 <input
                   className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
                   placeholder="Display name"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
                 />
-
                 <input
                   className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
                   placeholder="X/Twitter URL (optional)"
                   value={xUrl}
                   onChange={(e) => setXUrl(e.target.value)}
                 />
-
                 <textarea
                   className="min-h-[100px] rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
                   placeholder="Bio (optional)"
@@ -398,7 +378,9 @@ export default function DevProfilePage() {
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <h2 className="text-lg font-semibold">Coins</h2>
-                  <p className="mt-1 text-xs text-zinc-500">Coins you post are permanent and cannot be removed individually.</p>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Coins you post are permanent and cannot be removed individually.
+                  </p>
                 </div>
 
                 <span className="shrink-0 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
@@ -443,7 +425,7 @@ export default function DevProfilePage() {
                     const meta = metaByMint[mint];
                     const loadingMeta = !!metaLoadingMints[mint];
 
-                    const displayName = meta?.name || c.title || "Untitled coin";
+                    const display = meta?.name || c.title || "Untitled coin";
                     const symbol = meta?.symbol || null;
                     const logo = meta?.image || null;
 
@@ -466,7 +448,7 @@ export default function DevProfilePage() {
 
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
-                              <div className="text-sm font-semibold text-zinc-200">{displayName}</div>
+                              <div className="text-sm font-semibold text-zinc-200">{display}</div>
                               {symbol ? (
                                 <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] text-zinc-300">
                                   {symbol}
