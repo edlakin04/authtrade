@@ -6,78 +6,79 @@ import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 export const dynamic = "force-dynamic";
 
 const MAX_BYTES = 2 * 1024 * 1024; // 2MB
-const ALLOWED = new Set(["image/png", "image/jpeg", "image/webp"]);
+const ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
 
-function extFromMime(mime: string) {
-  if (mime === "image/png") return "png";
-  if (mime === "image/jpeg") return "jpg";
-  if (mime === "image/webp") return "webp";
+function extFromType(type: string) {
+  if (type === "image/jpeg") return "jpg";
+  if (type === "image/png") return "png";
+  if (type === "image/webp") return "webp";
   return "bin";
+}
+
+async function getViewerWallet() {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  if (!token) return null;
+
+  const session = await readSessionToken(token).catch(() => null);
+  return session?.wallet ?? null;
 }
 
 export async function POST(req: Request) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-    if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const wallet = await getViewerWallet();
+    if (!wallet) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
-    const session = await readSessionToken(token).catch(() => null);
-    const wallet = session?.wallet ? String(session.wallet) : "";
-    if (!wallet) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const form = await req.formData().catch(() => null);
+    const file = form?.get("file");
 
-    const form = await req.formData();
-    const file = form.get("file");
-
-    if (!(file instanceof File)) {
+    if (!file || !(file instanceof File)) {
       return NextResponse.json({ error: "Missing file" }, { status: 400 });
     }
 
     if (!ALLOWED.has(file.type)) {
-      return NextResponse.json({ error: "Only PNG/JPG/WEBP images are allowed" }, { status: 400 });
+      return NextResponse.json(
+        { error: `Invalid file type. Allowed: jpeg, png, webp.` },
+        { status: 400 }
+      );
+    }
+
+    if (file.size <= 0) {
+      return NextResponse.json({ error: "Empty file" }, { status: 400 });
     }
 
     if (file.size > MAX_BYTES) {
-      return NextResponse.json({ error: "Image too large (max 2MB)" }, { status: 400 });
+      return NextResponse.json({ error: "File too large (max 2MB)" }, { status: 400 });
     }
 
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const ext = extFromMime(file.type);
+    const ext = extFromType(file.type);
+    const path = `${wallet}/pfp.${ext}`; // stable path (overwrite)
 
-    // overwrite stable path so the latest avatar always wins
-    const path = `${wallet}/avatar.${ext}`;
+    const buf = Buffer.from(await file.arrayBuffer());
 
     const sb = supabaseAdmin();
 
-    // upload to Supabase Storage bucket "pfp"
-    const up = await sb.storage.from("pfp").upload(path, bytes, {
+    // Upload (overwrite)
+    const up = await sb.storage.from("pfp").upload(path, buf, {
       contentType: file.type,
-      upsert: true,
-      cacheControl: "3600"
+      upsert: true
     });
 
     if (up.error) {
       return NextResponse.json({ error: up.error.message }, { status: 500 });
     }
 
-    // public url (bucket should be public)
-    const pub = sb.storage.from("pfp").getPublicUrl(path);
-    const publicUrl = pub?.data?.publicUrl ? String(pub.data.publicUrl) : "";
-
-    if (!publicUrl) {
-      return NextResponse.json({ error: "Failed to get public URL" }, { status: 500 });
-    }
-
-    // update dev profile row
+    // Save path into dev_profiles
     const { error: uErr } = await sb
       .from("dev_profiles")
-      .update({ pfp_url: publicUrl, updated_at: new Date().toISOString() })
+      .update({ pfp_path: path })
       .eq("wallet", wallet);
 
     if (uErr) {
       return NextResponse.json({ error: uErr.message }, { status: 500 });
     }
 
-    return NextResponse.json({ ok: true, pfp_url: publicUrl });
+    return NextResponse.json({ ok: true, path });
   } catch (e: any) {
     return NextResponse.json(
       { error: "Failed to upload profile picture", details: e?.message ?? String(e) },
