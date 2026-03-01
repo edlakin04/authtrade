@@ -14,32 +14,36 @@ async function getViewerWallet() {
   return session?.wallet ?? null;
 }
 
-export async function POST(_req: Request, ctx: { params: { communityId: string } }) {
+export async function POST(_req: Request, ctx: { params: Promise<{ communityId: string }> }) {
   try {
-    const communityId = ctx.params.communityId;
+    const { communityId } = await ctx.params; // ✅ Next 15: params is a Promise
     const viewerWallet = await getViewerWallet();
     if (!viewerWallet) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const sb = supabaseAdmin();
 
-    // Prevent dev leaving their own community
-    const { data: comm } = await sb
+    // Make sure community exists
+    const { data: comm, error: commErr } = await sb
       .from("coin_communities")
-      .select("dev_wallet")
+      .select("id, dev_wallet")
       .eq("id", communityId)
       .maybeSingle();
 
-    if (comm?.dev_wallet === viewerWallet) {
+    if (commErr) return NextResponse.json({ error: commErr.message }, { status: 500 });
+    if (!comm) return NextResponse.json({ error: "Community not found" }, { status: 404 });
+
+    // Dev cannot "leave" their own community (keeps invariants simple)
+    if (viewerWallet === comm.dev_wallet) {
       return NextResponse.json({ error: "Dev cannot leave their own community" }, { status: 400 });
     }
 
-    const { error } = await sb
+    const { error: delErr } = await sb
       .from("community_members")
       .delete()
       .eq("community_id", communityId)
       .eq("member_wallet", viewerWallet);
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (delErr) return NextResponse.json({ error: delErr.message }, { status: 500 });
 
     return NextResponse.json({ ok: true });
   } catch (e: any) {
