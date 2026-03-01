@@ -46,6 +46,18 @@ type Live = {
   note?: string;
 };
 
+type CoinCommunityResp = {
+  ok: true;
+  community: {
+    id: string;
+    coin_id: string;
+    dev_wallet: string;
+    title: string | null;
+    created_at: string;
+  } | null;
+  viewerIsMember: boolean;
+};
+
 function shortAddr(s: string) {
   if (!s) return "";
   return `${s.slice(0, 4)}…${s.slice(-4)}`;
@@ -88,6 +100,13 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
   const [commentText, setCommentText] = useState("");
   const [voteBusy, setVoteBusy] = useState(false);
 
+  // community (separate from comments)
+  const [commLoading, setCommLoading] = useState(false);
+  const [community, setCommunity] = useState<CoinCommunityResp["community"]>(null);
+  const [viewerIsMember, setViewerIsMember] = useState(false);
+  const [commErr, setCommErr] = useState<string | null>(null);
+  const [createBusy, setCreateBusy] = useState(false);
+
   useEffect(() => {
     (async () => {
       const p = await params;
@@ -101,7 +120,7 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
     return devName || shortAddr(wallet);
   }
 
-  // ✅ This is the only UI change: prefer live.image, then live.dexImage, else show a placeholder
+  // prefer live.image, then live.dexImage, else placeholder
   const logoUrl = useMemo(() => {
     return (live?.image || live?.dexImage || null) as string | null;
   }, [live?.image, live?.dexImage]);
@@ -212,13 +231,58 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
       const json = await res.json().catch(() => null);
       if (!res.ok) throw new Error(json?.error || "Failed to load live data");
 
-      // Allow fallback logo key if the API adds it later
-      const out = json as Live;
-      setLive(out);
+      setLive(json as Live);
     } catch (e: any) {
       setLiveErr(e?.message ?? "Failed to load live data");
     } finally {
       setLiveLoading(false);
+    }
+  }
+
+  async function loadCommunity(coinIdToUse: string) {
+    if (!coinIdToUse) return;
+    setCommLoading(true);
+    setCommErr(null);
+    try {
+      const res = await fetch(`/api/coin/${encodeURIComponent(coinIdToUse)}/community`, { cache: "no-store" });
+      const json = (await res.json().catch(() => null)) as CoinCommunityResp | null;
+      if (!res.ok) throw new Error((json as any)?.error || "Failed to load community");
+      setCommunity(json?.community ?? null);
+      setViewerIsMember(!!json?.viewerIsMember);
+    } catch (e: any) {
+      setCommErr(e?.message ?? "Failed to load community");
+      setCommunity(null);
+      setViewerIsMember(false);
+    } finally {
+      setCommLoading(false);
+    }
+  }
+
+  async function createCommunity() {
+    if (!coin) return;
+    if (!viewerWallet) return alert("Sign in first (Get Started).");
+    if (viewerWallet !== coin.dev_wallet) return;
+
+    const title = prompt("Community title (optional):")?.trim() ?? "";
+    setCreateBusy(true);
+    try {
+      const res = await fetch(`/api/coin/${encodeURIComponent(coin.id)}/community`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: title || null })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || "Create failed");
+
+      await loadCommunity(coin.id);
+      if (json?.community?.id) {
+        // optional: jump straight in
+        window.location.href = `/community/${encodeURIComponent(json.community.id)}`;
+      }
+    } catch (e: any) {
+      alert(e?.message ?? "Create failed");
+    } finally {
+      setCreateBusy(false);
     }
   }
 
@@ -229,11 +293,12 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coinId]);
 
-  // load dev name + comments when coin loads
+  // load dev name + comments + community when coin loads
   useEffect(() => {
     if (!coin) return;
     loadDevName(coin.dev_wallet);
     loadComments(coin.id);
+    loadCommunity(coin.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coin?.id]);
 
@@ -259,6 +324,8 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mint]);
+
+  const viewerIsDevOwner = !!viewerWallet && !!coin && viewerWallet === coin.dev_wallet;
 
   return (
     <main className="min-h-screen bg-authswap text-white">
@@ -392,11 +459,61 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
               {live?.note ? <div className="mt-1">{live.note}</div> : null}
             </div>
 
-            {/* Community (upvote + comments on coin page) */}
+            {/* ✅ Community is its own thing (does NOT replace comments) */}
             <div className="mt-8 rounded-2xl border border-white/10 bg-white/5 p-5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h2 className="text-lg font-semibold">Community</h2>
+                  <p className="mt-1 text-sm text-zinc-400">
+                    Private group chat for this coin (join to view messages).
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {commLoading ? (
+                    <span className="text-xs text-zinc-400">Loading…</span>
+                  ) : community ? (
+                    <>
+                      {viewerIsMember ? (
+                        <span className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300">
+                          You’re a member
+                        </span>
+                      ) : (
+                        <span className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300">
+                          Not joined
+                        </span>
+                      )}
+
+                      {/* IMPORTANT: link uses community.id (not coin.id) */}
+                      <Link
+                        href={`/community/${encodeURIComponent(community.id)}`}
+                        className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-black hover:bg-zinc-200"
+                      >
+                        Open community →
+                      </Link>
+                    </>
+                  ) : viewerIsDevOwner ? (
+                    <button
+                      onClick={createCommunity}
+                      disabled={createBusy}
+                      className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+                    >
+                      {createBusy ? "Creating…" : "Create community"}
+                    </button>
+                  ) : (
+                    <span className="text-xs text-zinc-500">No community yet.</span>
+                  )}
+                </div>
+              </div>
+
+              {commErr ? <div className="mt-3 text-sm text-red-300">{commErr}</div> : null}
+            </div>
+
+            {/* ✅ Back to COMMENTS (upvotes + comments) */}
+            <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold">Comments</h2>
                   <p className="mt-1 text-sm text-zinc-400">Upvote and discuss this coin.</p>
                 </div>
 
