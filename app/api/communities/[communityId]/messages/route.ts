@@ -24,8 +24,10 @@ async function requireMember(sb: ReturnType<typeof supabaseAdmin>, communityId: 
   if (commErr) return { ok: false as const, status: 500 as const, error: commErr.message };
   if (!comm) return { ok: false as const, status: 404 as const, error: "Community not found" };
 
+  // Dev is always allowed
   if (viewerWallet === comm.dev_wallet) return { ok: true as const };
 
+  // Otherwise must be a member
   const { data: mem, error: memErr } = await sb
     .from("community_members")
     .select("community_id")
@@ -39,9 +41,18 @@ async function requireMember(sb: ReturnType<typeof supabaseAdmin>, communityId: 
   return { ok: true as const };
 }
 
+async function signCommunityImage(sb: ReturnType<typeof supabaseAdmin>, path?: string | null) {
+  if (!path) return null;
+  const { data, error } = await sb.storage.from("community").createSignedUrl(path, 60 * 30);
+  if (error) return null;
+  return data?.signedUrl ?? null;
+}
+
 /**
  * GET /api/communities/:communityId/messages?limit=40&before=ISO
- * (You’re not using this from the page right now, but it’s good to keep correct.)
+ * - If no `before`, return latest `limit` messages (desc)
+ * - If `before`, return older messages (< before)
+ * - Returns `text` + signed `image_url` for UI
  */
 export async function GET(req: Request, ctx: { params: Promise<{ communityId: string }> }) {
   try {
@@ -61,7 +72,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ communityId: st
 
     let q = sb
       .from("community_messages")
-      .select("id, community_id, author_wallet, content, image_url, created_at")
+      // ✅ DB columns you actually have (+ image_path after SQL)
+      .select("id, community_id, author_wallet, content, image_path, created_at")
       .eq("community_id", communityId)
       .order("created_at", { ascending: false })
       .limit(limit);
@@ -71,9 +83,18 @@ export async function GET(req: Request, ctx: { params: Promise<{ communityId: st
     const { data, error } = await q;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    const messages = (data ?? []).map((m: any) => ({
-      ...m,
-      text: m.content ?? null
+    const raw = data ?? [];
+
+    // Sign images (private bucket) → image_url for UI display
+    const signedUrls = await Promise.all(raw.map((m: any) => signCommunityImage(sb, m.image_path)));
+
+    const messages = raw.map((m: any, i: number) => ({
+      id: m.id,
+      community_id: m.community_id,
+      author_wallet: m.author_wallet,
+      text: m.content ?? null,
+      image_url: signedUrls[i] ?? null,
+      created_at: m.created_at
     }));
 
     const nextCursor = messages.length ? messages[messages.length - 1].created_at : null;
@@ -94,7 +115,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ communityId: st
 
 /**
  * POST /api/communities/:communityId/messages
- * body: { text?: string, content?: string, image_url?: string }
+ * body: { text?: string, content?: string, image_path?: string }
  */
 export async function POST(req: Request, ctx: { params: Promise<{ communityId: string }> }) {
   try {
@@ -104,7 +125,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ communityId: s
 
     const body = await req.json().catch(() => ({}));
 
-    // ✅ accept either text (UI) or content (older)
+    // accept either text (UI) or content (older)
     const content =
       typeof body?.text === "string"
         ? body.text.trim()
@@ -112,9 +133,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ communityId: s
           ? body.content.trim()
           : "";
 
-    const image_url = typeof body?.image_url === "string" ? body.image_url.trim() : null;
+    // ✅ new: store image_path (private storage), not image_url in DB
+    const image_path = typeof body?.image_path === "string" ? body.image_path.trim() : null;
 
-    if (!content && !image_url) {
+    if (!content && !image_path) {
       return NextResponse.json({ error: "Message text or image is required" }, { status: 400 });
     }
     if (content.length > 4000) {
@@ -126,25 +148,31 @@ export async function POST(req: Request, ctx: { params: Promise<{ communityId: s
     const allowed = await requireMember(sb, communityId, viewerWallet);
     if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
 
-    // IMPORTANT: DB column is content
     const { data: inserted, error: insErr } = await sb
       .from("community_messages")
       .insert({
         community_id: communityId,
         author_wallet: viewerWallet,
         content: content || null,
-        image_url: image_url || null
+        image_path: image_path || null
       })
-      .select("id, community_id, author_wallet, content, image_url, created_at")
+      .select("id, community_id, author_wallet, content, image_path, created_at")
       .single();
 
     if (insErr) return NextResponse.json({ error: insErr.message }, { status: 500 });
 
+    // Return signed URL for immediate UI use (optional but nice)
+    const signed = await signCommunityImage(sb, inserted?.image_path ?? null);
+
     return NextResponse.json({
       ok: true,
       message: {
-        ...inserted,
-        text: inserted?.content ?? null
+        id: inserted.id,
+        community_id: inserted.community_id,
+        author_wallet: inserted.author_wallet,
+        text: inserted?.content ?? null,
+        image_url: signed ?? null,
+        created_at: inserted.created_at
       }
     });
   } catch (e: any) {
