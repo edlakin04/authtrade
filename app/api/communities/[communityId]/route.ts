@@ -15,7 +15,6 @@ async function getViewerWallet() {
 }
 
 function extractCommunityIdFromUrl(req: Request) {
-  // /api/communities/<communityId>
   const { pathname } = new URL(req.url);
   const parts = pathname.split("/").filter(Boolean);
   const idx = parts.findIndex((p) => p === "communities");
@@ -31,7 +30,6 @@ export async function GET(req: Request) {
     const viewerWallet = await getViewerWallet();
     const sb = supabaseAdmin();
 
-    // 1) Load community
     const { data: comm, error: commErr } = await sb
       .from("coin_communities")
       .select("id, coin_id, dev_wallet, title, created_at")
@@ -41,7 +39,6 @@ export async function GET(req: Request) {
     if (commErr) return NextResponse.json({ error: commErr.message }, { status: 500 });
     if (!comm) return NextResponse.json({ error: "Community not found" }, { status: 404 });
 
-    // 2) Load coin row for header info
     const { data: coinRow, error: coinErr } = await sb
       .from("coins")
       .select("id, token_address")
@@ -50,9 +47,7 @@ export async function GET(req: Request) {
 
     if (coinErr) return NextResponse.json({ error: coinErr.message }, { status: 500 });
 
-    // 3) Determine viewerRole
     let viewerRole: "dev" | "member" | null = null;
-
     if (viewerWallet) {
       if (viewerWallet === comm.dev_wallet) {
         viewerRole = "dev";
@@ -69,7 +64,6 @@ export async function GET(req: Request) {
       }
     }
 
-    // 4) Members count
     const { count: membersCount, error: countErr } = await sb
       .from("community_members")
       .select("community_id", { count: "exact", head: true })
@@ -77,19 +71,16 @@ export async function GET(req: Request) {
 
     if (countErr) return NextResponse.json({ error: countErr.message }, { status: 500 });
 
-    // 5) Messages (only if member/dev)
     const url = new URL(req.url);
-    const cursor = url.searchParams.get("cursor"); // created_at cursor (older paging)
+    const cursor = url.searchParams.get("cursor");
 
     let messages: any[] = [];
     let nextCursor: string | null = null;
 
     if (viewerRole) {
-      // IMPORTANT: DB column is `content` (not `text`)
-      // image_url exists only if you add it via SQL (see below).
       let q = sb
         .from("community_messages")
-        .select("id, community_id, author_wallet, content, image_url, created_at")
+        .select("id, community_id, author_wallet, content, image_path, created_at")
         .eq("community_id", comm.id)
         .order("created_at", { ascending: false })
         .limit(51);
@@ -102,13 +93,10 @@ export async function GET(req: Request) {
       const list = rawMsgs ?? [];
       const hasMore = list.length > 50;
       const page = hasMore ? list.slice(0, 50) : list;
-
       nextCursor = hasMore && page.length ? page[page.length - 1].created_at : null;
 
-      // return ascending for chat UI
       const asc = [...page].reverse();
 
-      // Enrich author info (display_name + signed pfp)
       const authorWallets = Array.from(new Set(asc.map((m: any) => m.author_wallet).filter(Boolean)));
 
       const { data: profs } = await sb
@@ -126,16 +114,31 @@ export async function GET(req: Request) {
         return data?.signedUrl ?? null;
       }
 
+      async function signedCommunityImage(path?: string | null) {
+        if (!path) return null;
+        const { data, error } = await sb.storage.from("community").createSignedUrl(path, 60 * 30);
+        if (error) return null;
+        return data?.signedUrl ?? null;
+      }
+
       const pfpUrlByWallet = new Map<string, string | null>();
       await Promise.all(
         authorWallets.map(async (w) => {
           const p = profByWallet.get(w);
-          const url = await signedPfpUrlFromPath(p?.pfp_path ?? null);
-          pfpUrlByWallet.set(w, url);
+          const u = await signedPfpUrlFromPath(p?.pfp_path ?? null);
+          pfpUrlByWallet.set(w, u);
         })
       );
 
-      // ✅ Map DB content -> UI text (your UI uses m.text)
+      // Pre-sign message images
+      const imageUrlByMessageId = new Map<string, string | null>();
+      await Promise.all(
+        asc.map(async (m: any) => {
+          const u = await signedCommunityImage(m.image_path ?? null);
+          imageUrlByMessageId.set(m.id, u);
+        })
+      );
+
       messages = asc.map((m: any) => {
         const p = profByWallet.get(m.author_wallet);
         return {
@@ -145,29 +148,19 @@ export async function GET(req: Request) {
           author_name: p?.display_name ?? null,
           author_pfp_url: pfpUrlByWallet.get(m.author_wallet) ?? null,
           text: m.content ?? null,
-          image_url: m.image_url ?? null,
+          image_url: imageUrlByMessageId.get(m.id) ?? null,
           created_at: m.created_at
         };
       });
     }
 
     const coin = coinRow
-      ? {
-          id: coinRow.id,
-          token_address: coinRow.token_address,
-          name: null,
-          symbol: null,
-          image: null
-        }
+      ? { id: coinRow.id, token_address: coinRow.token_address, name: null, symbol: null, image: null }
       : null;
 
     return NextResponse.json({
       ok: true,
-      community: {
-        ...comm,
-        viewerRole,
-        membersCount: membersCount ?? 0
-      },
+      community: { ...comm, viewerRole, membersCount: membersCount ?? 0 },
       coin,
       messages,
       nextCursor
