@@ -15,7 +15,6 @@ async function getViewerWallet() {
 }
 
 async function requireMember(sb: ReturnType<typeof supabaseAdmin>, communityId: string, viewerWallet: string) {
-  // Check community exists + dev wallet
   const { data: comm, error: commErr } = await sb
     .from("coin_communities")
     .select("id, dev_wallet")
@@ -25,10 +24,8 @@ async function requireMember(sb: ReturnType<typeof supabaseAdmin>, communityId: 
   if (commErr) return { ok: false as const, status: 500 as const, error: commErr.message };
   if (!comm) return { ok: false as const, status: 404 as const, error: "Community not found" };
 
-  // Dev is always allowed
   if (viewerWallet === comm.dev_wallet) return { ok: true as const };
 
-  // Otherwise must be a member
   const { data: mem, error: memErr } = await sb
     .from("community_members")
     .select("community_id")
@@ -43,21 +40,18 @@ async function requireMember(sb: ReturnType<typeof supabaseAdmin>, communityId: 
 }
 
 /**
- * GET /api/communities/:communityId/messages?limit=40&before=2026-01-01T00:00:00.000Z
- * - No "load newer" button needed:
- *   - If no `before`, return latest `limit` messages (most recent chunk)
- *   - If `before`, return older messages (< before), also limited
+ * GET /api/communities/:communityId/messages?limit=40&before=ISO
+ * (You’re not using this from the page right now, but it’s good to keep correct.)
  */
 export async function GET(req: Request, ctx: { params: Promise<{ communityId: string }> }) {
   try {
-    const { communityId } = await ctx.params; // ✅ Next 15 params Promise
+    const { communityId } = await ctx.params;
     const viewerWallet = await getViewerWallet();
     if (!viewerWallet) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const url = new URL(req.url);
     const limitRaw = url.searchParams.get("limit");
-    const before = url.searchParams.get("before"); // ISO string cursor (created_at)
-
+    const before = url.searchParams.get("before");
     const limit = Math.min(Math.max(Number(limitRaw || 40) || 40, 1), 100);
 
     const sb = supabaseAdmin();
@@ -72,22 +66,23 @@ export async function GET(req: Request, ctx: { params: Promise<{ communityId: st
       .order("created_at", { ascending: false })
       .limit(limit);
 
-    if (before) {
-      // load older than `before`
-      q = q.lt("created_at", before);
-    }
+    if (before) q = q.lt("created_at", before);
 
     const { data, error } = await q;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    const messages = data ?? [];
+    const messages = (data ?? []).map((m: any) => ({
+      ...m,
+      text: m.content ?? null
+    }));
+
     const nextCursor = messages.length ? messages[messages.length - 1].created_at : null;
 
     return NextResponse.json({
       ok: true,
       communityId,
       messages,
-      nextCursor // pass this into `before=` when user clicks "Load older"
+      nextCursor
     });
   } catch (e: any) {
     return NextResponse.json(
@@ -99,23 +94,31 @@ export async function GET(req: Request, ctx: { params: Promise<{ communityId: st
 
 /**
  * POST /api/communities/:communityId/messages
- * body: { content?: string, image_url?: string }
+ * body: { text?: string, content?: string, image_url?: string }
  */
 export async function POST(req: Request, ctx: { params: Promise<{ communityId: string }> }) {
   try {
-    const { communityId } = await ctx.params; // ✅ Next 15 params Promise
+    const { communityId } = await ctx.params;
     const viewerWallet = await getViewerWallet();
     if (!viewerWallet) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await req.json().catch(() => ({}));
-    const content = typeof body?.content === "string" ? body.content.trim() : "";
+
+    // ✅ accept either text (UI) or content (older)
+    const content =
+      typeof body?.text === "string"
+        ? body.text.trim()
+        : typeof body?.content === "string"
+          ? body.content.trim()
+          : "";
+
     const image_url = typeof body?.image_url === "string" ? body.image_url.trim() : null;
 
     if (!content && !image_url) {
-      return NextResponse.json({ error: "Message content or image is required" }, { status: 400 });
+      return NextResponse.json({ error: "Message text or image is required" }, { status: 400 });
     }
-    if (content.length > 2000) {
-      return NextResponse.json({ error: "Message too long (max 2000 chars)" }, { status: 400 });
+    if (content.length > 4000) {
+      return NextResponse.json({ error: "Message too long (max 4000 chars)" }, { status: 400 });
     }
 
     const sb = supabaseAdmin();
@@ -123,6 +126,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ communityId: s
     const allowed = await requireMember(sb, communityId, viewerWallet);
     if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
 
+    // IMPORTANT: DB column is content
     const { data: inserted, error: insErr } = await sb
       .from("community_messages")
       .insert({
@@ -136,7 +140,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ communityId: s
 
     if (insErr) return NextResponse.json({ error: insErr.message }, { status: 500 });
 
-    return NextResponse.json({ ok: true, message: inserted });
+    return NextResponse.json({
+      ok: true,
+      message: {
+        ...inserted,
+        text: inserted?.content ?? null
+      }
+    });
   } catch (e: any) {
     return NextResponse.json(
       { error: "Failed to send message", details: e?.message ?? String(e) },
