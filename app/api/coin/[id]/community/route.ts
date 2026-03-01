@@ -14,9 +14,9 @@ async function getViewerWallet() {
   return session?.wallet ?? null;
 }
 
-export async function GET(_req: Request, ctx: { params: { id: string } }) {
+export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const coinId = ctx.params.id;
+    const { id: coinId } = await ctx.params; // ✅ Next 15: params is a Promise
     const viewerWallet = await getViewerWallet();
     const sb = supabaseAdmin();
 
@@ -58,9 +58,9 @@ export async function GET(_req: Request, ctx: { params: { id: string } }) {
   }
 }
 
-export async function POST(req: Request, ctx: { params: { id: string } }) {
+export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const coinId = ctx.params.id;
+    const { id: coinId } = await ctx.params; // ✅ Next 15: params is a Promise
     const viewerWallet = await getViewerWallet();
     if (!viewerWallet) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
