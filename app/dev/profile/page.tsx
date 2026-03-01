@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import TopNav from "@/components/TopNav";
+import Link from "next/link";
 
 type Profile = {
   wallet: string;
@@ -34,6 +35,20 @@ type LiveMeta = {
   image: string | null;
 };
 
+type Community = {
+  id: string;
+  coin_id: string;
+  dev_wallet: string;
+  title: string | null;
+  created_at: string;
+};
+
+type CommunityGet = {
+  ok: true;
+  community: Community | null;
+  viewerIsMember: boolean;
+};
+
 export default function DevProfilePage() {
   const [loading, setLoading] = useState(true);
 
@@ -61,6 +76,11 @@ export default function DevProfilePage() {
   // Coin metadata (name/symbol/logo) keyed by mint
   const [metaByMint, setMetaByMint] = useState<Record<string, LiveMeta | null>>({});
   const [metaLoadingMints, setMetaLoadingMints] = useState<Record<string, boolean>>({});
+
+  // Community status keyed by coin id
+  const [communityByCoinId, setCommunityByCoinId] = useState<Record<string, Community | null>>({});
+  const [communityLoadingByCoinId, setCommunityLoadingByCoinId] = useState<Record<string, boolean>>({});
+  const [communityCreatingByCoinId, setCommunityCreatingByCoinId] = useState<Record<string, boolean>>({});
 
   async function refresh() {
     setLoading(true);
@@ -139,6 +159,73 @@ export default function DevProfilePage() {
     fetchCoinMetaBatched(visible, 6);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coins]);
+
+  // ---- Community status fetching (per coin) ----
+  async function fetchCommunityForCoin(coinId: string) {
+    const id = (coinId || "").trim();
+    if (!id) return;
+
+    if (Object.prototype.hasOwnProperty.call(communityByCoinId, id)) return;
+
+    setCommunityLoadingByCoinId((prev) => ({ ...prev, [id]: true }));
+    try {
+      const res = await fetch(`/api/coin/${encodeURIComponent(id)}/community`, { cache: "no-store" });
+      const json = (await res.json().catch(() => null)) as CommunityGet | null;
+
+      if (!res.ok) {
+        // treat as none, but don’t break UI
+        setCommunityByCoinId((prev) => ({ ...prev, [id]: null }));
+        return;
+      }
+
+      setCommunityByCoinId((prev) => ({ ...prev, [id]: json?.community ?? null }));
+    } finally {
+      setCommunityLoadingByCoinId((prev) => ({ ...prev, [id]: false }));
+    }
+  }
+
+  async function fetchCommunityBatched(coinIds: string[], batchSize = 6) {
+    const uniq = Array.from(new Set(coinIds.filter(Boolean).map((x) => x.trim())));
+    const need = uniq.filter((id) => !Object.prototype.hasOwnProperty.call(communityByCoinId, id));
+    if (need.length === 0) return;
+
+    for (let i = 0; i < need.length; i += batchSize) {
+      const chunk = need.slice(i, i + batchSize);
+      await Promise.allSettled(chunk.map((id) => fetchCommunityForCoin(id)));
+    }
+  }
+
+  useEffect(() => {
+    if (!coins?.length) return;
+    const visibleIds = coins.slice(0, 50).map((c) => c.id);
+    fetchCommunityBatched(visibleIds, 6);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coins]);
+
+  async function createCommunity(coin: Coin, defaultTitle: string) {
+    if (!coin?.id) return;
+
+    const coinId = coin.id;
+    setCommunityCreatingByCoinId((prev) => ({ ...prev, [coinId]: true }));
+    try {
+      const res = await fetch(`/api/coin/${encodeURIComponent(coinId)}/community`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: defaultTitle || null })
+      });
+
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(json?.error ?? "Failed to create community");
+        return;
+      }
+
+      const created: Community | null = json?.community ?? null;
+      setCommunityByCoinId((prev) => ({ ...prev, [coinId]: created }));
+    } finally {
+      setCommunityCreatingByCoinId((prev) => ({ ...prev, [coinId]: false }));
+    }
+  }
 
   async function saveProfile() {
     const res = await fetch("/api/dev/profile", {
@@ -256,7 +343,7 @@ export default function DevProfilePage() {
                 <div className="flex items-center gap-4">
                   <div className="h-14 w-14 overflow-hidden rounded-full border border-white/10 bg-white/5">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    {(localPreview || pfpSignedUrl) ? (
+                    {localPreview || pfpSignedUrl ? (
                       <img
                         src={localPreview || pfpSignedUrl || ""}
                         alt=""
@@ -267,9 +354,7 @@ export default function DevProfilePage() {
 
                   <div className="min-w-0">
                     <div className="text-sm font-semibold">Profile picture</div>
-                    <div className="mt-1 text-xs text-zinc-400">
-                      JPG / PNG / WEBP • max 5MB
-                    </div>
+                    <div className="mt-1 text-xs text-zinc-400">JPG / PNG / WEBP • max 5MB</div>
 
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       <label className="cursor-pointer rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10">
@@ -429,6 +514,10 @@ export default function DevProfilePage() {
                     const symbol = meta?.symbol || null;
                     const logo = meta?.image || null;
 
+                    const community = communityByCoinId[c.id];
+                    const loadingComm = !!communityLoadingByCoinId[c.id];
+                    const creatingComm = !!communityCreatingByCoinId[c.id];
+
                     return (
                       <div
                         key={c.id}
@@ -468,9 +557,40 @@ export default function DevProfilePage() {
                           </div>
                         </div>
 
-                        <span className="shrink-0 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
-                          Permanent
-                        </span>
+                        {/* Right side actions (community) */}
+                        <div className="shrink-0 flex flex-col items-end gap-2">
+                          {community ? (
+                            <>
+                              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
+                                Community live
+                              </span>
+                              <Link
+                                href={`/community/${encodeURIComponent(community.id)}`}
+                                className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-black hover:bg-zinc-200"
+                              >
+                                Open →
+                              </Link>
+                            </>
+                          ) : (
+                            <>
+                              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
+                                {loadingComm ? "Checking…" : "No community"}
+                              </span>
+                              <button
+                                type="button"
+                                disabled={loadingComm || creatingComm}
+                                onClick={() => createCommunity(c, display)}
+                                className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10 disabled:opacity-60"
+                              >
+                                {creatingComm ? "Creating…" : "Create community"}
+                              </button>
+                            </>
+                          )}
+
+                          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
+                            Permanent
+                          </span>
+                        </div>
                       </div>
                     );
                   })
