@@ -14,14 +14,15 @@ async function getViewerWallet() {
   return session?.wallet ?? null;
 }
 
-export async function POST(_req: Request, ctx: { params: { communityId: string } }) {
+export async function POST(_req: Request, ctx: { params: Promise<{ communityId: string }> }) {
   try {
-    const communityId = ctx.params.communityId;
+    const { communityId } = await ctx.params; // ✅ Next 15: params is a Promise
     const viewerWallet = await getViewerWallet();
     if (!viewerWallet) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const sb = supabaseAdmin();
 
+    // Make sure community exists
     const { data: comm, error: commErr } = await sb
       .from("coin_communities")
       .select("id, dev_wallet")
@@ -31,14 +32,17 @@ export async function POST(_req: Request, ctx: { params: { communityId: string }
     if (commErr) return NextResponse.json({ error: commErr.message }, { status: 500 });
     if (!comm) return NextResponse.json({ error: "Community not found" }, { status: 404 });
 
-    const role = viewerWallet === comm.dev_wallet ? "dev" : "member";
-
-    const { error: insErr } = await sb.from("community_members").upsert(
-      { community_id: communityId, member_wallet: viewerWallet, role },
+    // Join (idempotent)
+    const { error: joinErr } = await sb.from("community_members").upsert(
+      {
+        community_id: communityId,
+        member_wallet: viewerWallet,
+        role: viewerWallet === comm.dev_wallet ? "dev" : "member"
+      },
       { onConflict: "community_id,member_wallet" }
     );
 
-    if (insErr) return NextResponse.json({ error: insErr.message }, { status: 500 });
+    if (joinErr) return NextResponse.json({ error: joinErr.message }, { status: 500 });
 
     return NextResponse.json({ ok: true });
   } catch (e: any) {
