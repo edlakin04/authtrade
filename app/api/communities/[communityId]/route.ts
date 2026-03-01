@@ -15,7 +15,7 @@ async function getViewerWallet() {
 }
 
 function extractCommunityIdFromUrl(req: Request) {
-  // Example: /api/communities/<id>
+  // /api/communities/<communityId>
   const { pathname } = new URL(req.url);
   const parts = pathname.split("/").filter(Boolean);
   const idx = parts.findIndex((p) => p === "communities");
@@ -31,7 +31,7 @@ export async function GET(req: Request) {
     const viewerWallet = await getViewerWallet();
     const sb = supabaseAdmin();
 
-    // community
+    // 1) Load community
     const { data: comm, error: commErr } = await sb
       .from("coin_communities")
       .select("id, coin_id, dev_wallet, title, created_at")
@@ -41,7 +41,7 @@ export async function GET(req: Request) {
     if (commErr) return NextResponse.json({ error: commErr.message }, { status: 500 });
     if (!comm) return NextResponse.json({ error: "Community not found" }, { status: 404 });
 
-    // coin info (so header has token + meta fields)
+    // 2) Load coin row for header info
     const { data: coinRow, error: coinErr } = await sb
       .from("coins")
       .select("id, token_address")
@@ -50,7 +50,7 @@ export async function GET(req: Request) {
 
     if (coinErr) return NextResponse.json({ error: coinErr.message }, { status: 500 });
 
-    // membership / role
+    // 3) Determine viewerRole
     let viewerRole: "dev" | "member" | null = null;
 
     if (viewerWallet) {
@@ -69,7 +69,7 @@ export async function GET(req: Request) {
       }
     }
 
-    // members count
+    // 4) Members count
     const { count: membersCount, error: countErr } = await sb
       .from("community_members")
       .select("community_id", { count: "exact", head: true })
@@ -77,25 +77,24 @@ export async function GET(req: Request) {
 
     if (countErr) return NextResponse.json({ error: countErr.message }, { status: 500 });
 
-    // messages only if member/dev
+    // 5) Messages (only if member/dev)
     const url = new URL(req.url);
-    const cursor = url.searchParams.get("cursor"); // ISO timestamp from oldest loaded msg
+    const cursor = url.searchParams.get("cursor"); // created_at cursor (older paging)
 
     let messages: any[] = [];
     let nextCursor: string | null = null;
 
     if (viewerRole) {
-      // Fetch one extra so we can compute nextCursor
+      // IMPORTANT: DB column is `content` (not `text`)
+      // image_url exists only if you add it via SQL (see below).
       let q = sb
         .from("community_messages")
-        .select("id, community_id, author_wallet, text, image_url, created_at")
+        .select("id, community_id, author_wallet, content, image_url, created_at")
         .eq("community_id", comm.id)
         .order("created_at", { ascending: false })
         .limit(51);
 
-      if (cursor) {
-        q = q.lt("created_at", cursor);
-      }
+      if (cursor) q = q.lt("created_at", cursor);
 
       const { data: rawMsgs, error: msgErr } = await q;
       if (msgErr) return NextResponse.json({ error: msgErr.message }, { status: 500 });
@@ -104,11 +103,13 @@ export async function GET(req: Request) {
       const hasMore = list.length > 50;
       const page = hasMore ? list.slice(0, 50) : list;
 
-      // oldest is last (because desc). nextCursor = created_at of oldest msg we returned
       nextCursor = hasMore && page.length ? page[page.length - 1].created_at : null;
 
-      // enrich authors with display_name and signed pfp url (private bucket)
-      const authorWallets = Array.from(new Set(page.map((m) => m.author_wallet).filter(Boolean)));
+      // return ascending for chat UI
+      const asc = [...page].reverse();
+
+      // Enrich author info (display_name + signed pfp)
+      const authorWallets = Array.from(new Set(asc.map((m: any) => m.author_wallet).filter(Boolean)));
 
       const { data: profs } = await sb
         .from("dev_profiles")
@@ -134,21 +135,22 @@ export async function GET(req: Request) {
         })
       );
 
-      // return ascending for chat UI
-      const asc = [...page].reverse();
-
-      messages = asc.map((m) => {
+      // ✅ Map DB content -> UI text (your UI uses m.text)
+      messages = asc.map((m: any) => {
         const p = profByWallet.get(m.author_wallet);
         return {
-          ...m,
+          id: m.id,
+          community_id: m.community_id,
+          author_wallet: m.author_wallet,
           author_name: p?.display_name ?? null,
-          author_pfp_url: pfpUrlByWallet.get(m.author_wallet) ?? null
+          author_pfp_url: pfpUrlByWallet.get(m.author_wallet) ?? null,
+          text: m.content ?? null,
+          image_url: m.image_url ?? null,
+          created_at: m.created_at
         };
       });
     }
 
-    // coin meta fields are optional; your page can live without name/symbol/image,
-    // but we return placeholders so it won’t break typing.
     const coin = coinRow
       ? {
           id: coinRow.id,
