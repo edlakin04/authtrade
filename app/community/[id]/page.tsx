@@ -12,7 +12,7 @@ type CommunityPayload = {
     dev_wallet: string;
     title: string | null;
     created_at: string;
-    viewerRole: "dev" | "member" | null; // null = not joined
+    viewerRole: "dev" | "member" | null;
     membersCount?: number;
   };
   coin?: {
@@ -26,13 +26,13 @@ type CommunityPayload = {
     id: string;
     community_id: string;
     author_wallet: string;
-    author_name?: string | null; // preferred (dev display_name)
-    author_pfp_url?: string | null; // optional
+    author_name?: string | null;
+    author_pfp_url?: string | null;
     text: string | null;
     image_url: string | null;
     created_at: string;
   }>;
-  nextCursor?: string | null; // for older pagination
+  nextCursor?: string | null;
 };
 
 function shortAddr(s: string) {
@@ -53,22 +53,23 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
 
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-
   const [data, setData] = useState<CommunityPayload | null>(null);
 
-  // messages + paging
   const [msgs, setMsgs] = useState<NonNullable<CommunityPayload["messages"]>>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [olderBusy, setOlderBusy] = useState(false);
 
   // post box
   const [text, setText] = useState("");
-  const [imageUrl, setImageUrl] = useState(""); // (stage later: file upload)
   const [sendBusy, setSendBusy] = useState(false);
 
-  // join/leave
-  const [joinBusy, setJoinBusy] = useState(false);
+  // upload state
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imageUploading, setImageUploading] = useState(false);
+  const [imagePath, setImagePath] = useState<string | null>(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
 
+  const [joinBusy, setJoinBusy] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -115,11 +116,9 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
       if (!res.ok) throw new Error((json as any)?.error || "Failed to load community");
 
       setData(json as CommunityPayload);
-      const initial = (json?.messages ?? []) as NonNullable<CommunityPayload["messages"]>;
-      setMsgs(initial);
+      setMsgs((json?.messages ?? []) as any);
       setNextCursor(json?.nextCursor ?? null);
 
-      // scroll to bottom after first load if member
       setTimeout(() => {
         if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
       }, 50);
@@ -138,7 +137,6 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [communityId]);
 
-  // Poll for new messages (no "load newer" button)
   useEffect(() => {
     if (!communityId) return;
     if (!isMember) return;
@@ -147,27 +145,21 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
 
     const t = setInterval(async () => {
       if (!alive) return;
-
       try {
-        const res = await fetch(`/api/communities/${encodeURIComponent(communityId)}`, {
-          cache: "no-store"
-        });
+        const res = await fetch(`/api/communities/${encodeURIComponent(communityId)}`, { cache: "no-store" });
         const json = (await res.json().catch(() => null)) as CommunityPayload | null;
         if (!res.ok || !json?.ok) return;
 
-        const incoming = (json.messages ?? []) as NonNullable<CommunityPayload["messages"]>;
-        setMsgs((prev) => mergeUniqueById(prev, incoming));
-
+        setMsgs((prev) => mergeUniqueById(prev, (json.messages ?? []) as any));
         setNextCursor(json.nextCursor ?? null);
 
-        // keep viewerRole in sync
         setData((prev) =>
           prev
             ? { ...prev, community: { ...prev.community, viewerRole: json.community.viewerRole } }
-            : (json as CommunityPayload)
+            : (json as any)
         );
       } catch {
-        // ignore transient errors
+        // ignore
       }
     }, 10_000);
 
@@ -179,10 +171,7 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
   }, [communityId, isMember]);
 
   async function loadOlder() {
-    if (!communityId) return;
-    if (!nextCursor) return;
-    if (olderBusy) return;
-
+    if (!communityId || !nextCursor || olderBusy) return;
     setOlderBusy(true);
     try {
       const res = await fetch(
@@ -192,11 +181,9 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
       const json = (await res.json().catch(() => null)) as CommunityPayload | null;
       if (!res.ok) throw new Error((json as any)?.error || "Failed to load older messages");
 
-      const incoming = (json?.messages ?? []) as NonNullable<CommunityPayload["messages"]>;
-      setMsgs((prev) => mergeUniqueById(prev, incoming));
+      setMsgs((prev) => mergeUniqueById(prev, (json?.messages ?? []) as any));
       setNextCursor(json?.nextCursor ?? null);
 
-      // slight scroll nudge so you feel it loaded
       if (listRef.current) listRef.current.scrollTop = 80;
     } catch (e: any) {
       alert(e?.message ?? "Failed to load older messages");
@@ -238,27 +225,65 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
     }
   }
 
+  // local preview URL for selected image
+  useEffect(() => {
+    if (!imageFile) {
+      setImagePreviewUrl(null);
+      return;
+    }
+    const u = URL.createObjectURL(imageFile);
+    setImagePreviewUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [imageFile]);
+
+  async function uploadImage() {
+    if (!communityId || !imageFile) return;
+    setImageUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", imageFile);
+
+      const res = await fetch(`/api/communities/${encodeURIComponent(communityId)}/upload`, {
+        method: "POST",
+        body: fd
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || "Upload failed");
+
+      setImagePath(json?.path ?? null);
+      // we keep the local preview (faster) until after send
+    } catch (e: any) {
+      alert(e?.message ?? "Upload failed");
+    } finally {
+      setImageUploading(false);
+    }
+  }
+
+  function clearImage() {
+    setImageFile(null);
+    setImagePath(null);
+    setImagePreviewUrl(null);
+  }
+
   async function send() {
     if (!communityId) return;
     const t = text.trim();
-    const img = imageUrl.trim() || null;
 
-    if (!t && !img) return;
+    if (!t && !imagePath) return;
 
     setSendBusy(true);
     try {
       const res = await fetch(`/api/communities/${encodeURIComponent(communityId)}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: t || null, image_url: img })
+        body: JSON.stringify({ text: t || null, image_path: imagePath })
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json?.error || "Send failed");
 
       setText("");
-      setImageUrl("");
+      clearImage();
 
-      // Refresh latest after sending
       const res2 = await fetch(`/api/communities/${encodeURIComponent(communityId)}`, { cache: "no-store" });
       const j2 = (await res2.json().catch(() => null)) as CommunityPayload | null;
       if (res2.ok && j2?.ok) {
@@ -266,7 +291,6 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
         setNextCursor(j2.nextCursor ?? null);
       }
 
-      // scroll to bottom
       setTimeout(() => {
         if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
       }, 50);
@@ -350,13 +374,10 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
               {joinBusy ? "Joining…" : "Join community"}
             </button>
 
-            <p className="mt-3 text-xs text-zinc-500">
-              Anyone can join. Leaving removes access to messages until you re-join.
-            </p>
+            <p className="mt-3 text-xs text-zinc-500">Anyone can join.</p>
           </div>
         ) : (
           <>
-            {/* Messages */}
             <div className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-4">
               <div className="flex items-center justify-between gap-3 px-2 pb-3">
                 <div className="text-sm font-semibold">Chat</div>
@@ -374,10 +395,7 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
                 )}
               </div>
 
-              <div
-                ref={listRef}
-                className="h-[520px] overflow-auto rounded-2xl border border-white/10 bg-black/30 p-3"
-              >
+              <div ref={listRef} className="h-[520px] overflow-auto rounded-2xl border border-white/10 bg-black/30 p-3">
                 {msgs.length === 0 ? (
                   <div className="flex h-full items-center justify-center text-sm text-zinc-500">
                     No messages yet. Say hi 👋
@@ -392,9 +410,7 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
                             <div className="flex min-w-0 items-center gap-2">
                               <div className="h-8 w-8 overflow-hidden rounded-full border border-white/10 bg-white/5">
                                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                                {m.author_pfp_url ? (
-                                  <img src={m.author_pfp_url} alt="" className="h-full w-full object-cover" />
-                                ) : null}
+                                {m.author_pfp_url ? <img src={m.author_pfp_url} alt="" className="h-full w-full object-cover" /> : null}
                               </div>
 
                               <div className="min-w-0">
@@ -433,18 +449,58 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
                   disabled={sendBusy}
                 />
 
-                {/* stage later: replace with file upload */}
-                <input
-                  className="w-full rounded-2xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
-                  placeholder="Image URL (optional) — we’ll replace this with upload"
-                  value={imageUrl}
-                  onChange={(e) => setImageUrl(e.target.value)}
-                  disabled={sendBusy}
-                />
+                {/* Image upload */}
+                <div className="rounded-2xl border border-white/10 bg-black/40 p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="cursor-pointer rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10">
+                      Choose image
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/gif,image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0] || null;
+                          setImageFile(f);
+                          setImagePath(null); // need upload again for new file
+                        }}
+                      />
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={uploadImage}
+                      disabled={!imageFile || imageUploading || !!imagePath}
+                      className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+                    >
+                      {imagePath ? "Uploaded ✓" : imageUploading ? "Uploading…" : "Upload"}
+                    </button>
+
+                    {(imageFile || imagePath) ? (
+                      <button
+                        type="button"
+                        onClick={clearImage}
+                        className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10"
+                      >
+                        Remove
+                      </button>
+                    ) : null}
+                  </div>
+
+                  {imagePreviewUrl ? (
+                    <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-black/20">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={imagePreviewUrl} alt="" className="max-h-[260px] w-full object-cover" />
+                    </div>
+                  ) : null}
+
+                  <p className="mt-2 text-[11px] text-zinc-500">
+                    Upload first, then send. Images are private (signed URLs).
+                  </p>
+                </div>
 
                 <button
                   onClick={send}
-                  disabled={sendBusy || (!text.trim() && !imageUrl.trim())}
+                  disabled={sendBusy || (!text.trim() && !imagePath)}
                   className="w-full rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
                 >
                   {sendBusy ? "Sending…" : "Send"}
@@ -456,7 +512,6 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
               </div>
             </div>
 
-            {/* Footer helper */}
             {data.coin?.id ? (
               <div className="mt-4">
                 <Link
