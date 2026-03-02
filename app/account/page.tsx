@@ -50,10 +50,13 @@ type MyProfilePayload = {
   };
 };
 
-type MePayload = {
+type DevBatchPayload = {
   ok: true;
-  wallet: string | null;
-  isDev: boolean;
+  profiles: Array<{
+    wallet: string;
+    display_name: string | null;
+    pfp_url: string | null;
+  }>;
 };
 
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
@@ -83,10 +86,6 @@ export default function AccountPage() {
 
   const [tab, setTab] = useState<TabKey>("wallet");
 
-  // ✅ Viewer type (dev vs normal user)
-  const [meLoading, setMeLoading] = useState(false);
-  const [isDev, setIsDev] = useState(false);
-
   // Wallet/portfolio state
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -101,6 +100,9 @@ export default function AccountPage() {
   const [followLoading, setFollowLoading] = useState(false);
   const [followErr, setFollowErr] = useState<string | null>(null);
   const [following, setFollowing] = useState<string[]>([]);
+  const [followMetaByWallet, setFollowMetaByWallet] = useState<
+    Record<string, { name: string | null; pfpUrl: string | null }>
+  >({});
 
   // Profile state
   const [profLoading, setProfLoading] = useState(false);
@@ -113,33 +115,6 @@ export default function AccountPage() {
   const [profSaving, setProfSaving] = useState(false);
 
   const owner = useMemo(() => publicKey?.toBase58() ?? "", [publicKey]);
-
-  // ✅ Load /api/me once to determine if dev
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      setMeLoading(true);
-      try {
-        const res = await fetch("/api/me", { cache: "no-store" });
-        const json = (await res.json().catch(() => null)) as MePayload | null;
-        if (!cancelled) setIsDev(!!json?.isDev);
-      } catch {
-        if (!cancelled) setIsDev(false);
-      } finally {
-        if (!cancelled) setMeLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // ✅ If dev somehow ends up on Profile tab, bounce them back
-  useEffect(() => {
-    if (isDev && tab === "profile") setTab("wallet");
-  }, [isDev, tab]);
 
   // --- Portfolio load (Wallet tab)
   useEffect(() => {
@@ -211,7 +186,7 @@ export default function AccountPage() {
     };
   }, [tab]);
 
-  // --- Following load (Following tab)
+  // --- Following load (Following tab) + fetch dev names/pfps in ONE call
   useEffect(() => {
     if (tab !== "following") return;
 
@@ -225,11 +200,33 @@ export default function AccountPage() {
         const json = (await res.json().catch(() => null)) as FollowingFeedPayload | null;
 
         if (!res.ok) throw new Error((json as any)?.error || "Failed to load following");
-        if (!cancelled) setFollowing((json?.devWallets ?? []) as string[]);
+
+        const wallets = (json?.devWallets ?? []) as string[];
+        if (!cancelled) setFollowing(wallets);
+
+        // ✅ Batch-load dev profile meta (name + signed pfp)
+        const res2 = await fetch("/api/public/dev/batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ wallets })
+        });
+
+        const json2 = (await res2.json().catch(() => null)) as DevBatchPayload | any;
+        if (!res2.ok) {
+          // Don’t hard-fail the whole tab; just fall back to wallets
+          if (!cancelled) setFollowMetaByWallet({});
+        } else {
+          const map: Record<string, { name: string | null; pfpUrl: string | null }> = {};
+          for (const p of (json2?.profiles ?? []) as DevBatchPayload["profiles"]) {
+            map[p.wallet] = { name: p.display_name ?? null, pfpUrl: p.pfp_url ?? null };
+          }
+          if (!cancelled) setFollowMetaByWallet(map);
+        }
       } catch (e: any) {
         if (!cancelled) {
           setFollowErr(e?.message ?? "Failed to load following");
           setFollowing([]);
+          setFollowMetaByWallet({});
         }
       } finally {
         if (!cancelled) setFollowLoading(false);
@@ -241,10 +238,9 @@ export default function AccountPage() {
     };
   }, [tab]);
 
-  // --- Profile load (Profile tab) — only if NOT dev
+  // --- Profile load (Profile tab)
   useEffect(() => {
     if (tab !== "profile") return;
-    if (isDev) return;
 
     let cancelled = false;
 
@@ -275,7 +271,7 @@ export default function AccountPage() {
     return () => {
       cancelled = true;
     };
-  }, [tab, isDev]);
+  }, [tab]);
 
   const rows = useMemo(() => {
     if (!data) return [];
@@ -387,16 +383,14 @@ export default function AccountPage() {
           {tab === "wallet" && loading && <span className="text-xs text-zinc-400">Loading…</span>}
           {tab === "communities" && commLoading && <span className="text-xs text-zinc-400">Loading…</span>}
           {tab === "following" && followLoading && <span className="text-xs text-zinc-400">Loading…</span>}
-          {tab === "profile" && profLoading && !isDev && <span className="text-xs text-zinc-400">Loading…</span>}
-          {meLoading ? <span className="text-xs text-zinc-600"> </span> : null}
+          {tab === "profile" && profLoading && <span className="text-xs text-zinc-400">Loading…</span>}
         </div>
 
         <div className="mt-5 flex flex-wrap gap-2">
           <TabButton k="wallet" label="Wallet" />
           <TabButton k="communities" label="Communities" />
           <TabButton k="following" label="Following" />
-          {/* ✅ Hide profile tab for devs */}
-          {!isDev ? <TabButton k="profile" label="Profile" /> : null}
+          <TabButton k="profile" label="Profile" />
         </div>
 
         {!connected && tab === "wallet" && (
@@ -573,30 +567,43 @@ export default function AccountPage() {
                   You aren’t following any devs yet. Browse devs on the Dashboard and hit Follow.
                 </div>
               ) : (
-                following.map((w) => (
-                  <Link
-                    key={w}
-                    href={`/dev/${encodeURIComponent(w)}`}
-                    className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/30 p-4 hover:bg-black/40 transition"
-                    title={w}
-                  >
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold text-zinc-200">{shortAddr(w)}</div>
-                      <div className="mt-1 font-mono text-[11px] text-zinc-500">{w}</div>
-                    </div>
+                following.map((w) => {
+                  const meta = followMetaByWallet[w];
+                  const name = meta?.name?.trim() || shortAddr(w);
+                  const pfpUrl = meta?.pfpUrl ?? null;
 
-                    <span className="shrink-0 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs hover:bg-white/10">
-                      View →
-                    </span>
-                  </Link>
-                ))
+                  return (
+                    <Link
+                      key={w}
+                      href={`/dev/${encodeURIComponent(w)}`}
+                      className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/30 p-4 hover:bg-black/40 transition"
+                      title={w}
+                    >
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="h-10 w-10 shrink-0 overflow-hidden rounded-full border border-white/10 bg-white/5">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          {pfpUrl ? <img src={pfpUrl} alt="" className="h-full w-full object-cover" /> : null}
+                        </div>
+
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-zinc-200">{name}</div>
+                          <div className="mt-1 font-mono text-[11px] text-zinc-500">{w}</div>
+                        </div>
+                      </div>
+
+                      <span className="shrink-0 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs hover:bg-white/10">
+                        View →
+                      </span>
+                    </Link>
+                  );
+                })
               )}
             </div>
           </div>
         )}
 
-        {/* PROFILE TAB (non-dev only) */}
-        {tab === "profile" && !isDev && (
+        {/* PROFILE TAB */}
+        {tab === "profile" && (
           <div className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-5">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">Profile</h2>
@@ -676,7 +683,8 @@ export default function AccountPage() {
             </button>
 
             <p className="mt-3 text-xs text-zinc-500">
-              This profile is not a public page — it’s just used to show your name + avatar on comments, reviews and community posts.
+              This profile is not a public page — it’s just used to show your name + avatar on comments, reviews and
+              community posts.
             </p>
           </div>
         )}
