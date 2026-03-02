@@ -3,39 +3,43 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const dynamic = "force-dynamic";
 
-/**
- * POST /api/public/dev/batch
- * body: { wallets: string[] }
- * returns: { ok: true, profiles: [{ wallet, display_name, pfp_url }] }
- */
+type BatchReq = {
+  wallets?: unknown;
+};
+
+type ProfileRow = {
+  wallet: string;
+  display_name: string | null;
+  pfp_url: string | null;
+};
+
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const walletsRaw = Array.isArray(body?.wallets) ? body.wallets : [];
+    const body = (await req.json().catch(() => ({}))) as BatchReq;
 
-    const wallets = Array.from(
+    const walletsRaw = Array.isArray(body.wallets) ? body.wallets : [];
+
+    // ✅ force real string[]
+    const wallets: string[] = Array.from(
       new Set(
         walletsRaw
-          .map((w: any) => (typeof w === "string" ? w.trim() : ""))
-          .filter(Boolean)
+          .map((w) => (typeof w === "string" ? w.trim() : ""))
+          .filter((w): w is string => Boolean(w))
       )
     ).slice(0, 200);
 
     if (wallets.length === 0) {
-      return NextResponse.json({ ok: true, profiles: [] });
+      return NextResponse.json({ ok: true, profiles: [] satisfies ProfileRow[] });
     }
 
     const sb = supabaseAdmin();
 
-    // dev_profiles holds display_name + pfp_path (private bucket)
     const { data: profs, error } = await sb
       .from("dev_profiles")
       .select("wallet, display_name, pfp_path")
       .in("wallet", wallets);
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
     async function signedPfpUrlFromPath(path?: string | null) {
       if (!path) return null;
@@ -44,22 +48,21 @@ export async function POST(req: Request) {
       return data?.signedUrl ?? null;
     }
 
-    const rows = profs ?? [];
+    const rows = (profs ?? []) as Array<{ wallet: string; display_name: string | null; pfp_path: string | null }>;
 
-    // Sign in parallel (safe at this scale)
-    const profiles = await Promise.all(
-      rows.map(async (p: any) => ({
+    const signed: ProfileRow[] = await Promise.all(
+      rows.map(async (p) => ({
         wallet: p.wallet,
         display_name: p.display_name ?? null,
         pfp_url: await signedPfpUrlFromPath(p.pfp_path ?? null)
       }))
     );
 
-    // Make sure the response includes all requested wallets (even if no dev_profile exists yet)
-    const byWallet = new Map<string, any>();
-    for (const p of profiles) byWallet.set(p.wallet, p);
+    const byWallet = new Map<string, ProfileRow>();
+    for (const p of signed) byWallet.set(p.wallet, p);
 
-    const ordered = wallets.map((w) => {
+    // ✅ ordered list always matches requested wallets (even missing profiles)
+    const ordered: ProfileRow[] = wallets.map((w) => {
       const hit = byWallet.get(w);
       return (
         hit ?? {
