@@ -19,8 +19,15 @@ async function getViewerWallet(): Promise<string | null> {
 }
 
 async function ensureUser(sb: ReturnType<typeof supabaseAdmin>, wallet: string) {
-  // keep users table consistent
   await sb.from("users").upsert({ wallet }, { onConflict: "wallet" });
+  await sb.from("user_profiles").upsert({ wallet }, { onConflict: "wallet" });
+}
+
+async function signedUserPfp(sb: ReturnType<typeof supabaseAdmin>, path?: string | null) {
+  if (!path) return null;
+  const { data, error } = await sb.storage.from("userpfp").createSignedUrl(path, 60 * 30);
+  if (error) return null;
+  return data?.signedUrl ?? null;
 }
 
 export async function GET(_req: Request, ctx: { params: Promise<{ wallet: string }> }) {
@@ -30,7 +37,6 @@ export async function GET(_req: Request, ctx: { params: Promise<{ wallet: string
   const dev_wallet = decodeURIComponent(devWallet || "").trim();
   if (!dev_wallet) return NextResponse.json({ error: "Missing dev wallet" }, { status: 400 });
 
-  // list latest reviews
   const { data: reviews, error } = await sb
     .from("dev_reviews")
     .select("id, dev_wallet, reviewer_wallet, rating, comment, created_at, updated_at")
@@ -40,18 +46,42 @@ export async function GET(_req: Request, ctx: { params: Promise<{ wallet: string
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const count = reviews?.length ?? 0;
-  const avg =
-    count > 0
-      ? reviews!.reduce((s, r) => s + (Number(r.rating) || 0), 0) / count
-      : null;
+  const rows = reviews ?? [];
+  const wallets = Array.from(new Set(rows.map((r) => r.reviewer_wallet).filter(Boolean)));
+
+  const { data: profs } = await sb
+    .from("user_profiles")
+    .select("wallet, display_name, pfp_path")
+    .in("wallet", wallets);
+
+  const profByWallet = new Map<string, any>();
+  for (const p of profs ?? []) profByWallet.set(p.wallet, p);
+
+  const pfpUrlByWallet = new Map<string, string | null>();
+  await Promise.all(
+    wallets.map(async (w) => {
+      const p = profByWallet.get(w);
+      const url = await signedUserPfp(sb, p?.pfp_path ?? null);
+      pfpUrlByWallet.set(w, url);
+    })
+  );
+
+  const count = rows.length;
+  const avg = count > 0 ? rows.reduce((s, r) => s + (Number(r.rating) || 0), 0) / count : null;
 
   return NextResponse.json({
     ok: true,
     dev_wallet,
     count,
     avgRating: avg ? Number(avg.toFixed(2)) : null,
-    reviews: reviews ?? []
+    reviews: rows.map((r) => {
+      const p = profByWallet.get(r.reviewer_wallet);
+      return {
+        ...r,
+        reviewer_name: (p?.display_name ?? null) as string | null,
+        reviewer_pfp_url: (pfpUrlByWallet.get(r.reviewer_wallet) ?? null) as string | null
+      };
+    })
   });
 }
 
@@ -79,7 +109,6 @@ export async function POST(req: Request, ctx: { params: Promise<{ wallet: string
   await ensureUser(sb, viewerWallet);
   await ensureUser(sb, dev_wallet);
 
-  // one review per reviewer per dev (unique constraint) → upsert to allow edit
   const { error } = await sb
     .from("dev_reviews")
     .upsert(
