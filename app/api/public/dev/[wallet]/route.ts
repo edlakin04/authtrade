@@ -3,10 +3,16 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { cookies } from "next/headers";
 import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 
-export async function GET(
-  _req: Request,
-  { params }: { params: Promise<{ wallet: string }> }
-) {
+export const dynamic = "force-dynamic";
+
+async function signedDevPostImageUrl(sb: ReturnType<typeof supabaseAdmin>, path?: string | null) {
+  if (!path) return null;
+  const { data, error } = await sb.storage.from("dev-posts").createSignedUrl(path, 60 * 30);
+  if (error) return null;
+  return data?.signedUrl ?? null;
+}
+
+export async function GET(_req: Request, { params }: { params: Promise<{ wallet: string }> }) {
   const { wallet } = await params;
   const devWallet = (wallet ?? "").trim();
 
@@ -38,12 +44,26 @@ export async function GET(
 
   const postsRes = await sb
     .from("dev_posts")
-    .select("id, wallet, content, created_at")
+    .select("id, wallet, content, image_path, created_at")
     .eq("wallet", devWallet)
     .order("created_at", { ascending: false })
     .limit(50);
 
   if (postsRes.error) return NextResponse.json({ error: postsRes.error.message }, { status: 500 });
+
+  const postsRaw = postsRes.data ?? [];
+
+  // Sign image URLs (private bucket)
+  const posts = await Promise.all(
+    postsRaw.map(async (p: any) => ({
+      id: p.id,
+      wallet: p.wallet,
+      content: p.content,
+      created_at: p.created_at,
+      image_path: p.image_path ?? null,
+      image_url: await signedDevPostImageUrl(sb, p.image_path ?? null)
+    }))
+  );
 
   const coinsRes = await sb
     .from("coins")
@@ -72,7 +92,7 @@ export async function GET(
     viewerWallet,
     isFollowing,
     profile: profileRes.data,
-    posts: postsRes.data ?? [],
+    posts,
     coins: coinsRes.data ?? []
   });
 }
