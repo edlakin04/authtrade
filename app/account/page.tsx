@@ -50,6 +50,12 @@ type MyProfilePayload = {
   };
 };
 
+type MePayload = {
+  ok: true;
+  wallet: string | null;
+  isDev: boolean;
+};
+
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
 function shortAddr(m: string) {
@@ -77,6 +83,10 @@ export default function AccountPage() {
 
   const [tab, setTab] = useState<TabKey>("wallet");
 
+  // ✅ Viewer type (dev vs normal user)
+  const [meLoading, setMeLoading] = useState(false);
+  const [isDev, setIsDev] = useState(false);
+
   // Wallet/portfolio state
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -103,6 +113,33 @@ export default function AccountPage() {
   const [profSaving, setProfSaving] = useState(false);
 
   const owner = useMemo(() => publicKey?.toBase58() ?? "", [publicKey]);
+
+  // ✅ Load /api/me once to determine if dev
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      setMeLoading(true);
+      try {
+        const res = await fetch("/api/me", { cache: "no-store" });
+        const json = (await res.json().catch(() => null)) as MePayload | null;
+        if (!cancelled) setIsDev(!!json?.isDev);
+      } catch {
+        if (!cancelled) setIsDev(false);
+      } finally {
+        if (!cancelled) setMeLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // ✅ If dev somehow ends up on Profile tab, bounce them back
+  useEffect(() => {
+    if (isDev && tab === "profile") setTab("wallet");
+  }, [isDev, tab]);
 
   // --- Portfolio load (Wallet tab)
   useEffect(() => {
@@ -204,9 +241,10 @@ export default function AccountPage() {
     };
   }, [tab]);
 
-  // --- Profile load (Profile tab)
+  // --- Profile load (Profile tab) — only if NOT dev
   useEffect(() => {
     if (tab !== "profile") return;
+    if (isDev) return;
 
     let cancelled = false;
 
@@ -237,7 +275,7 @@ export default function AccountPage() {
     return () => {
       cancelled = true;
     };
-  }, [tab]);
+  }, [tab, isDev]);
 
   const rows = useMemo(() => {
     if (!data) return [];
@@ -349,14 +387,16 @@ export default function AccountPage() {
           {tab === "wallet" && loading && <span className="text-xs text-zinc-400">Loading…</span>}
           {tab === "communities" && commLoading && <span className="text-xs text-zinc-400">Loading…</span>}
           {tab === "following" && followLoading && <span className="text-xs text-zinc-400">Loading…</span>}
-          {tab === "profile" && profLoading && <span className="text-xs text-zinc-400">Loading…</span>}
+          {tab === "profile" && profLoading && !isDev && <span className="text-xs text-zinc-400">Loading…</span>}
+          {meLoading ? <span className="text-xs text-zinc-600"> </span> : null}
         </div>
 
         <div className="mt-5 flex flex-wrap gap-2">
           <TabButton k="wallet" label="Wallet" />
           <TabButton k="communities" label="Communities" />
           <TabButton k="following" label="Following" />
-          <TabButton k="profile" label="Profile" />
+          {/* ✅ Hide profile tab for devs */}
+          {!isDev ? <TabButton k="profile" label="Profile" /> : null}
         </div>
 
         {!connected && tab === "wallet" && (
@@ -555,8 +595,8 @@ export default function AccountPage() {
           </div>
         )}
 
-        {/* PROFILE TAB */}
-        {tab === "profile" && (
+        {/* PROFILE TAB (non-dev only) */}
+        {tab === "profile" && !isDev && (
           <div className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-5">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">Profile</h2>
@@ -573,7 +613,7 @@ export default function AccountPage() {
               <div className="flex items-center gap-4">
                 <div className="h-14 w-14 overflow-hidden rounded-full border border-white/10 bg-white/5">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  {(localPreview || pfpSignedUrl) ? (
+                  {localPreview || pfpSignedUrl ? (
                     <img src={localPreview || pfpSignedUrl || ""} alt="" className="h-full w-full object-cover" />
                   ) : null}
                 </div>
