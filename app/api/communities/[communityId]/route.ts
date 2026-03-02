@@ -77,6 +77,27 @@ export async function GET(req: Request) {
     let messages: any[] = [];
     let nextCursor: string | null = null;
 
+    async function signedUserPfp(path?: string | null) {
+      if (!path) return null;
+      const { data, error } = await sb.storage.from("userpfp").createSignedUrl(path, 60 * 30);
+      if (error) return null;
+      return data?.signedUrl ?? null;
+    }
+
+    async function signedDevPfp(path?: string | null) {
+      if (!path) return null;
+      const { data, error } = await sb.storage.from("pfp").createSignedUrl(path, 60 * 30);
+      if (error) return null;
+      return data?.signedUrl ?? null;
+    }
+
+    async function signedCommunityImage(path?: string | null) {
+      if (!path) return null;
+      const { data, error } = await sb.storage.from("community").createSignedUrl(path, 60 * 30);
+      if (error) return null;
+      return data?.signedUrl ?? null;
+    }
+
     if (viewerRole) {
       let q = sb
         .from("community_messages")
@@ -96,37 +117,37 @@ export async function GET(req: Request) {
       nextCursor = hasMore && page.length ? page[page.length - 1].created_at : null;
 
       const asc = [...page].reverse();
-
       const authorWallets = Array.from(new Set(asc.map((m: any) => m.author_wallet).filter(Boolean)));
 
-      const { data: profs } = await sb
+      // Prefer normal user profiles
+      const { data: userProfs } = await sb
+        .from("user_profiles")
+        .select("wallet, display_name, pfp_path")
+        .in("wallet", authorWallets);
+
+      const userByWallet = new Map<string, any>();
+      for (const p of userProfs ?? []) userByWallet.set(p.wallet, p);
+
+      // Fallback: dev profiles (some authors might be devs)
+      const { data: devProfs } = await sb
         .from("dev_profiles")
         .select("wallet, display_name, pfp_path")
         .in("wallet", authorWallets);
 
-      const profByWallet = new Map<string, any>();
-      for (const p of profs ?? []) profByWallet.set(p.wallet, p);
+      const devByWallet = new Map<string, any>();
+      for (const p of devProfs ?? []) devByWallet.set(p.wallet, p);
 
-      async function signedPfpUrlFromPath(path?: string | null) {
-        if (!path) return null;
-        const { data, error } = await sb.storage.from("pfp").createSignedUrl(path, 60 * 30);
-        if (error) return null;
-        return data?.signedUrl ?? null;
-      }
-
-      async function signedCommunityImage(path?: string | null) {
-        if (!path) return null;
-        const { data, error } = await sb.storage.from("community").createSignedUrl(path, 60 * 30);
-        if (error) return null;
-        return data?.signedUrl ?? null;
-      }
-
-      const pfpUrlByWallet = new Map<string, string | null>();
+      // Pre-sign avatars
+      const avatarByWallet = new Map<string, string | null>();
       await Promise.all(
         authorWallets.map(async (w) => {
-          const p = profByWallet.get(w);
-          const u = await signedPfpUrlFromPath(p?.pfp_path ?? null);
-          pfpUrlByWallet.set(w, u);
+          const up = userByWallet.get(w);
+          if (up?.pfp_path) {
+            avatarByWallet.set(w, await signedUserPfp(up.pfp_path));
+            return;
+          }
+          const dp = devByWallet.get(w);
+          avatarByWallet.set(w, await signedDevPfp(dp?.pfp_path ?? null));
         })
       );
 
@@ -134,19 +155,25 @@ export async function GET(req: Request) {
       const imageUrlByMessageId = new Map<string, string | null>();
       await Promise.all(
         asc.map(async (m: any) => {
-          const u = await signedCommunityImage(m.image_path ?? null);
-          imageUrlByMessageId.set(m.id, u);
+          imageUrlByMessageId.set(m.id, await signedCommunityImage(m.image_path ?? null));
         })
       );
 
       messages = asc.map((m: any) => {
-        const p = profByWallet.get(m.author_wallet);
+        const up = userByWallet.get(m.author_wallet);
+        const dp = devByWallet.get(m.author_wallet);
+
+        const author_name =
+          (typeof up?.display_name === "string" && up.display_name) ||
+          (typeof dp?.display_name === "string" && dp.display_name) ||
+          null;
+
         return {
           id: m.id,
           community_id: m.community_id,
           author_wallet: m.author_wallet,
-          author_name: p?.display_name ?? null,
-          author_pfp_url: pfpUrlByWallet.get(m.author_wallet) ?? null,
+          author_name,
+          author_pfp_url: avatarByWallet.get(m.author_wallet) ?? null,
           text: m.content ?? null,
           image_url: imageUrlByMessageId.get(m.id) ?? null,
           created_at: m.created_at
