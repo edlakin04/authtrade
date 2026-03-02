@@ -25,6 +25,9 @@ type Post = {
   id: string;
   content: string;
   created_at: string;
+  // ✅ new (either/both depending on your API)
+  image_url?: string | null; // signed URL (recommended to return from API)
+  image_path?: string | null; // storage path (if you prefer to sign elsewhere)
 };
 
 type LiveMeta = {
@@ -60,7 +63,10 @@ export default function DevProfilePage() {
   const [bio, setBio] = useState("");
   const [xUrl, setXUrl] = useState("");
 
+  // ✅ update composer
   const [postContent, setPostContent] = useState("");
+  const [postFile, setPostFile] = useState<File | null>(null);
+  const [postBusy, setPostBusy] = useState(false);
 
   const [coinAddr, setCoinAddr] = useState("");
   const [coinTitle, setCoinTitle] = useState("");
@@ -95,7 +101,7 @@ export default function DevProfilePage() {
 
     setProfile(data.profile);
     setCoins(data.coins ?? []);
-    setPosts(data.posts ?? []);
+    setPosts((data.posts ?? []) as Post[]);
 
     if (data.profile) {
       setDisplayName(data.profile.display_name ?? "");
@@ -173,7 +179,6 @@ export default function DevProfilePage() {
       const json = (await res.json().catch(() => null)) as CommunityGet | null;
 
       if (!res.ok) {
-        // treat as none, but don’t break UI
         setCommunityByCoinId((prev) => ({ ...prev, [id]: null }));
         return;
       }
@@ -235,7 +240,6 @@ export default function DevProfilePage() {
         display_name: displayName,
         bio,
         x_url: xUrl || null
-        // NOTE: no pfp_url here anymore (private storage + signed urls)
       })
     });
 
@@ -266,18 +270,31 @@ export default function DevProfilePage() {
     }
   }
 
+  // ✅ Create update with optional image
   async function createPost() {
-    const res = await fetch("/api/dev/posts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: postContent })
-    });
+    const content = postContent.trim();
+    if (content.length < 2) return alert("Post too short");
 
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return alert(data?.error ?? "Post failed");
+    setPostBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("content", content);
+      if (postFile) fd.append("file", postFile);
 
-    setPostContent("");
-    await refresh();
+      const res = await fetch("/api/dev/posts", {
+        method: "POST",
+        body: fd
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return alert(data?.error ?? "Post failed");
+
+      setPostContent("");
+      setPostFile(null);
+      await refresh();
+    } finally {
+      setPostBusy(false);
+    }
   }
 
   async function addCoin() {
@@ -322,6 +339,17 @@ export default function DevProfilePage() {
       if (localPreview) URL.revokeObjectURL(localPreview);
     };
   }, [localPreview]);
+
+  const postPreview = useMemo(() => {
+    if (!postFile) return null;
+    return URL.createObjectURL(postFile);
+  }, [postFile]);
+
+  useEffect(() => {
+    return () => {
+      if (postPreview) URL.revokeObjectURL(postPreview);
+    };
+  }, [postPreview]);
 
   return (
     <main className="min-h-screen bg-authswap text-white">
@@ -427,19 +455,73 @@ export default function DevProfilePage() {
               </button>
             </div>
 
+            {/* ✅ Updates (now supports image upload) */}
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
               <h2 className="text-lg font-semibold">Post an update</h2>
+
               <textarea
                 className="mt-3 min-h-[110px] w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
                 placeholder="e.g. Launching something soon…"
                 value={postContent}
                 onChange={(e) => setPostContent(e.target.value)}
+                maxLength={500}
               />
+
+              {/* Image picker */}
+              <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">Attach a photo (optional)</div>
+                    <div className="mt-1 text-xs text-zinc-400">JPG / PNG / WEBP • max 5MB</div>
+                  </div>
+
+                  {postFile ? (
+                    <button
+                      type="button"
+                      onClick={() => setPostFile(null)}
+                      className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10"
+                    >
+                      Remove
+                    </button>
+                  ) : null}
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <label className="cursor-pointer rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10">
+                    Choose photo
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0] || null;
+                        setPostFile(f);
+                      }}
+                    />
+                  </label>
+                  {postFile ? (
+                    <span className="text-xs text-zinc-400">
+                      {postFile.name} • {(postFile.size / (1024 * 1024)).toFixed(2)}MB
+                    </span>
+                  ) : (
+                    <span className="text-xs text-zinc-500">No image selected.</span>
+                  )}
+                </div>
+
+                {postPreview ? (
+                  <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-black/20">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={postPreview} alt="" className="max-h-[360px] w-full object-cover" />
+                  </div>
+                ) : null}
+              </div>
+
               <button
                 onClick={createPost}
-                className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200"
+                disabled={postBusy || postContent.trim().length < 2}
+                className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
               >
-                Post update
+                {postBusy ? "Posting…" : "Post update"}
               </button>
 
               <div className="mt-6">
@@ -448,24 +530,35 @@ export default function DevProfilePage() {
                   {posts.length === 0 ? (
                     <div className="text-sm text-zinc-500">No posts yet.</div>
                   ) : (
-                    posts.slice(0, 5).map((p) => (
+                    posts.slice(0, 8).map((p) => (
                       <div key={p.id} className="rounded-xl border border-white/10 bg-black/30 p-3">
                         <div className="text-xs text-zinc-500">{new Date(p.created_at).toLocaleString()}</div>
-                        <div className="mt-1 text-sm text-zinc-200">{p.content}</div>
+                        <div className="mt-1 text-sm text-zinc-200 whitespace-pre-wrap break-words">{p.content}</div>
+
+                        {p.image_url ? (
+                          <div className="mt-2 overflow-hidden rounded-xl border border-white/10 bg-black/20">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={p.image_url} alt="" className="max-h-[420px] w-full object-cover" />
+                          </div>
+                        ) : null}
                       </div>
                     ))
                   )}
                 </div>
+
+                <p className="mt-3 text-[11px] text-zinc-500">
+                  If images don’t show: make sure your <span className="font-mono">/api/dev/profile</span> GET is returning{" "}
+                  <span className="font-mono">image_url</span> for each post (signed).
+                </p>
               </div>
             </div>
 
+            {/* Coins */}
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5 lg:col-span-2">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <h2 className="text-lg font-semibold">Coins</h2>
-                  <p className="mt-1 text-xs text-zinc-500">
-                    Coins you post are permanent and cannot be removed individually.
-                  </p>
+                  <p className="mt-1 text-xs text-zinc-500">Coins you post are permanent and cannot be removed individually.</p>
                 </div>
 
                 <span className="shrink-0 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
@@ -551,13 +644,10 @@ export default function DevProfilePage() {
 
                             <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
                             {c.description ? <div className="mt-1 text-xs text-zinc-300">{c.description}</div> : null}
-                            <div className="mt-2 text-[11px] text-zinc-500">
-                              {new Date(c.created_at).toLocaleString()}
-                            </div>
+                            <div className="mt-2 text-[11px] text-zinc-500">{new Date(c.created_at).toLocaleString()}</div>
                           </div>
                         </div>
 
-                        {/* Right side actions (community) */}
                         <div className="shrink-0 flex flex-col items-end gap-2">
                           {community ? (
                             <>
