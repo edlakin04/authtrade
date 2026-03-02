@@ -19,6 +19,13 @@ async function safeReadJson(req: Request): Promise<any | null> {
   }
 }
 
+async function signedUserPfp(sb: ReturnType<typeof supabaseAdmin>, path?: string | null) {
+  if (!path) return null;
+  const { data, error } = await sb.storage.from("userpfp").createSignedUrl(path, 60 * 30);
+  if (error) return null;
+  return data?.signedUrl ?? null;
+}
+
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const sb = supabaseAdmin();
@@ -32,15 +39,41 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  const rows = data ?? [];
+  const wallets = Array.from(new Set(rows.map((r) => r.author_wallet).filter(Boolean)));
+
+  // fetch user profiles for commenters
+  const { data: profs } = await sb
+    .from("user_profiles")
+    .select("wallet, display_name, pfp_path")
+    .in("wallet", wallets);
+
+  const profByWallet = new Map<string, any>();
+  for (const p of profs ?? []) profByWallet.set(p.wallet, p);
+
+  const pfpUrlByWallet = new Map<string, string | null>();
+  await Promise.all(
+    wallets.map(async (w) => {
+      const p = profByWallet.get(w);
+      const url = await signedUserPfp(sb, p?.pfp_path ?? null);
+      pfpUrlByWallet.set(w, url);
+    })
+  );
+
   return NextResponse.json({
     ok: true,
-    comments: (data ?? []).map((r) => ({
-      id: r.id,
-      coin_id: r.coin_id,
-      author_wallet: r.author_wallet,
-      comment: r.comment,
-      created_at: r.created_at
-    }))
+    comments: rows.map((r) => {
+      const p = profByWallet.get(r.author_wallet);
+      return {
+        id: r.id,
+        coin_id: r.coin_id,
+        author_wallet: r.author_wallet,
+        author_name: (p?.display_name ?? null) as string | null,
+        author_pfp_url: (pfpUrlByWallet.get(r.author_wallet) ?? null) as string | null,
+        comment: r.comment,
+        created_at: r.created_at
+      };
+    })
   });
 }
 
@@ -56,7 +89,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const body = await safeReadJson(req);
 
-  // accept multiple keys so your UI can send whatever
   const raw =
     (typeof body?.comment === "string" && body.comment) ||
     (typeof body?.content === "string" && body.content) ||
@@ -74,6 +106,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   // ensure users row exists
   await sb.from("users").upsert({ wallet: session.wallet }, { onConflict: "wallet" });
+  // optional: ensure profile row exists (so they can later set name/pfp)
+  await sb.from("user_profiles").upsert({ wallet: session.wallet }, { onConflict: "wallet" });
 
   const { error } = await sb.from("coin_comments").insert({
     coin_id: id,
