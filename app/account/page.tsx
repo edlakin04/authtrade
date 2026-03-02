@@ -40,6 +40,16 @@ type FollowingFeedPayload = {
   coins?: any[];
 };
 
+type MyProfilePayload = {
+  ok: true;
+  profile: {
+    wallet: string;
+    display_name: string;
+    pfp_path: string | null;
+    pfp_url: string | null;
+  };
+};
+
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
 function shortAddr(m: string) {
@@ -60,7 +70,7 @@ function fmtAmt(n: number) {
   return n.toLocaleString(undefined, { maximumFractionDigits: 6 });
 }
 
-type TabKey = "wallet" | "communities" | "following";
+type TabKey = "wallet" | "communities" | "following" | "profile";
 
 export default function AccountPage() {
   const { publicKey, connected } = useWallet();
@@ -81,6 +91,16 @@ export default function AccountPage() {
   const [followLoading, setFollowLoading] = useState(false);
   const [followErr, setFollowErr] = useState<string | null>(null);
   const [following, setFollowing] = useState<string[]>([]);
+
+  // Profile state
+  const [profLoading, setProfLoading] = useState(false);
+  const [profErr, setProfErr] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState("");
+  const [pfpSignedUrl, setPfpSignedUrl] = useState<string | null>(null);
+
+  const [pfpFile, setPfpFile] = useState<File | null>(null);
+  const [pfpUploading, setPfpUploading] = useState(false);
+  const [profSaving, setProfSaving] = useState(false);
 
   const owner = useMemo(() => publicKey?.toBase58() ?? "", [publicKey]);
 
@@ -184,7 +204,41 @@ export default function AccountPage() {
     };
   }, [tab]);
 
-  // Build a “Phantom-ish” list where SOL is the first row
+  // --- Profile load (Profile tab)
+  useEffect(() => {
+    if (tab !== "profile") return;
+
+    let cancelled = false;
+
+    (async () => {
+      setProfLoading(true);
+      setProfErr(null);
+      try {
+        const res = await fetch("/api/me/profile", { cache: "no-store" });
+        const json = (await res.json().catch(() => null)) as MyProfilePayload | any;
+
+        if (!res.ok) throw new Error(json?.error || "Failed to load profile");
+
+        if (!cancelled) {
+          setDisplayName(json?.profile?.display_name ?? "");
+          setPfpSignedUrl(json?.profile?.pfp_url ?? null);
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          setProfErr(e?.message ?? "Failed to load profile");
+          setDisplayName("");
+          setPfpSignedUrl(null);
+        }
+      } finally {
+        if (!cancelled) setProfLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [tab]);
+
   const rows = useMemo(() => {
     if (!data) return [];
 
@@ -199,7 +253,7 @@ export default function AccountPage() {
 
     const tokenRows = (data.tokens || []).map((t) => ({
       key: t.mint,
-      name: shortAddr(t.mint), // we don’t have metadata yet
+      name: shortAddr(t.mint),
       mint: t.mint,
       amount: t.uiAmount,
       usdValue: t.usdValue,
@@ -225,6 +279,60 @@ export default function AccountPage() {
     );
   }
 
+  const localPreview = useMemo(() => {
+    if (!pfpFile) return null;
+    return URL.createObjectURL(pfpFile);
+  }, [pfpFile]);
+
+  useEffect(() => {
+    return () => {
+      if (localPreview) URL.revokeObjectURL(localPreview);
+    };
+  }, [localPreview]);
+
+  async function saveProfile() {
+    setProfSaving(true);
+    try {
+      const res = await fetch("/api/me/profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ display_name: displayName })
+      });
+
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || "Save failed");
+      alert("Saved.");
+    } catch (e: any) {
+      alert(e?.message ?? "Save failed");
+    } finally {
+      setProfSaving(false);
+    }
+  }
+
+  async function uploadPfp() {
+    if (!pfpFile) return;
+    setPfpUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", pfpFile);
+
+      const res = await fetch("/api/me/pfp", { method: "POST", body: fd });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || "Upload failed");
+
+      setPfpFile(null);
+
+      // refresh signed url
+      const res2 = await fetch("/api/me/profile", { cache: "no-store" });
+      const j2 = await res2.json().catch(() => null);
+      setPfpSignedUrl(j2?.profile?.pfp_url ?? null);
+    } catch (e: any) {
+      alert(e?.message ?? "Upload failed");
+    } finally {
+      setPfpUploading(false);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-authswap text-white">
       <TopNav />
@@ -241,16 +349,16 @@ export default function AccountPage() {
           {tab === "wallet" && loading && <span className="text-xs text-zinc-400">Loading…</span>}
           {tab === "communities" && commLoading && <span className="text-xs text-zinc-400">Loading…</span>}
           {tab === "following" && followLoading && <span className="text-xs text-zinc-400">Loading…</span>}
+          {tab === "profile" && profLoading && <span className="text-xs text-zinc-400">Loading…</span>}
         </div>
 
-        {/* Sub-tabs */}
         <div className="mt-5 flex flex-wrap gap-2">
           <TabButton k="wallet" label="Wallet" />
           <TabButton k="communities" label="Communities" />
           <TabButton k="following" label="Following" />
+          <TabButton k="profile" label="Profile" />
         </div>
 
-        {/* If not connected, still show message (especially for wallet tab) */}
         {!connected && tab === "wallet" && (
           <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-5">
             <p className="text-sm text-zinc-300">Connect a wallet to view your portfolio.</p>
@@ -260,7 +368,6 @@ export default function AccountPage() {
         {/* WALLET TAB */}
         {tab === "wallet" && connected && (
           <>
-            {/* Portrait “Total Balance” card */}
             <div className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-6 shadow-2xl">
               <p className="text-xs text-zinc-400">Total balance</p>
 
@@ -276,7 +383,6 @@ export default function AccountPage() {
                 USD is estimated from live prices. Some tokens won’t have a price.
               </p>
 
-              {/* Quick actions (keep this) */}
               <div className="mt-5 grid grid-cols-2 gap-2">
                 <Link
                   href={`/trade?outputMint=${encodeURIComponent(WSOL_MINT)}`}
@@ -293,14 +399,12 @@ export default function AccountPage() {
               </div>
             </div>
 
-            {/* Errors */}
             {err && (
               <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-4">
                 <p className="text-sm text-red-200">{err}</p>
               </div>
             )}
 
-            {/* Token list (Phantom style) */}
             <div className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-5">
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-semibold">Tokens</h2>
@@ -320,7 +424,6 @@ export default function AccountPage() {
                     <div className="text-right">
                       <p className="text-sm">{fmtUsd(r.usdValue ?? null)}</p>
 
-                      {/* No “SOL” label rows; just show buttons for non-SOL tokens */}
                       {r.mint !== WSOL_MINT && (
                         <div className="mt-2 flex justify-end gap-2">
                           <Link
@@ -384,17 +487,14 @@ export default function AccountPage() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <div className="truncate text-sm font-semibold">
-                            {c.title || "Coin community"}
-                          </div>
+                          <div className="truncate text-sm font-semibold">{c.title || "Coin community"}</div>
                           <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-zinc-300">
                             {c.viewerRole === "dev" ? "Owner" : "Member"}
                           </span>
                         </div>
 
                         <div className="mt-1 text-xs text-zinc-500">
-                          Coin:{" "}
-                          <span className="font-mono text-zinc-400">{shortAddr(c.coin_id)}</span>
+                          Coin: <span className="font-mono text-zinc-400">{shortAddr(c.coin_id)}</span>
                         </div>
                       </div>
 
@@ -452,6 +552,92 @@ export default function AccountPage() {
                 ))
               )}
             </div>
+          </div>
+        )}
+
+        {/* PROFILE TAB */}
+        {tab === "profile" && (
+          <div className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Profile</h2>
+              <span className="text-xs text-zinc-400">{profLoading ? "Loading…" : ""}</span>
+            </div>
+
+            {profErr ? (
+              <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-4">
+                <p className="text-sm text-red-200">{profErr}</p>
+              </div>
+            ) : null}
+
+            <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4">
+              <div className="flex items-center gap-4">
+                <div className="h-14 w-14 overflow-hidden rounded-full border border-white/10 bg-white/5">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  {(localPreview || pfpSignedUrl) ? (
+                    <img src={localPreview || pfpSignedUrl || ""} alt="" className="h-full w-full object-cover" />
+                  ) : null}
+                </div>
+
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold">Profile picture</div>
+                  <div className="mt-1 text-xs text-zinc-400">JPG / PNG / WEBP • max 5MB</div>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <label className="cursor-pointer rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10">
+                      Choose photo
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0] || null;
+                          setPfpFile(f);
+                        }}
+                      />
+                    </label>
+
+                    <button
+                      onClick={uploadPfp}
+                      disabled={!pfpFile || pfpUploading}
+                      className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+                    >
+                      {pfpUploading ? "Uploading…" : "Upload"}
+                    </button>
+
+                    {pfpFile ? (
+                      <button
+                        onClick={() => setPfpFile(null)}
+                        className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10"
+                      >
+                        Cancel
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3">
+              <input
+                className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
+                placeholder="Display name (optional)"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                maxLength={40}
+              />
+            </div>
+
+            <button
+              onClick={saveProfile}
+              disabled={profSaving}
+              className="mt-4 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+            >
+              {profSaving ? "Saving…" : "Save profile"}
+            </button>
+
+            <p className="mt-3 text-xs text-zinc-500">
+              This profile is not a public page — it’s just used to show your name + avatar on comments, reviews and community posts.
+            </p>
           </div>
         )}
       </div>
