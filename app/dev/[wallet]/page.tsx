@@ -36,6 +36,8 @@ type ReviewsPayload = {
     id: string;
     dev_wallet: string;
     reviewer_wallet: string;
+    reviewer_name?: string | null;
+    reviewer_pfp_url?: string | null;
     rating: number;
     comment: string | null;
     created_at: string;
@@ -125,20 +127,16 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Signed PFP URL (private bucket)
   const [pfpUrl, setPfpUrl] = useState<string | null>(null);
 
-  // Reviews state
   const [reviews, setReviews] = useState<ReviewsPayload | null>(null);
   const [reviewsErr, setReviewsErr] = useState<string | null>(null);
   const [reviewsBusy, setReviewsBusy] = useState(false);
 
-  // Review form
   const [myRating, setMyRating] = useState<number>(5);
   const [myComment, setMyComment] = useState<string>("");
   const [submitBusy, setSubmitBusy] = useState(false);
 
-  // Coin metadata (name/symbol/logo) keyed by mint
   const [metaByMint, setMetaByMint] = useState<Record<string, LiveMeta | null>>({});
   const [metaLoadingMints, setMetaLoadingMints] = useState<Record<string, boolean>>({});
 
@@ -179,8 +177,6 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
     }
 
     setData(json);
-
-    // also refresh signed avatar (private bucket)
     await loadPfp(wallet);
   }
 
@@ -211,10 +207,8 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [devWallet]);
 
-  // Prefill the form if the viewer already left a review
   useEffect(() => {
     if (!data?.viewerWallet || !reviews?.reviews) return;
-
     const mine = reviews.reviews.find((r) => r.reviewer_wallet === data.viewerWallet);
     if (!mine) return;
 
@@ -287,7 +281,6 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
     }
   }
 
-  // ---- Coin meta fetching (same data source as coin page: /api/coin-live) ----
   async function fetchCoinMeta(mint: string) {
     const m = (mint || "").trim();
     if (!m) return;
@@ -368,7 +361,6 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
           <div className="mt-6 text-zinc-400">Loading…</div>
         ) : (
           <>
-            {/* Profile card */}
             <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-5">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="flex items-center gap-4">
@@ -393,7 +385,6 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
                   </div>
                 </div>
 
-                {/* Rating summary */}
                 <div className="rounded-2xl border border-white/10 bg-black/25 px-4 py-3">
                   <div className="flex items-center gap-2">
                     <div className="text-2xl font-semibold">{avg == null ? "—" : avg.toFixed(2)}</div>
@@ -414,7 +405,6 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
               )}
             </div>
 
-            {/* Reviews */}
             <div className="mt-6 grid gap-6 lg:grid-cols-2">
               <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
                 <div className="flex items-center justify-between">
@@ -430,20 +420,37 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
 
                 <div className="mt-4 space-y-2">
                   {reviews?.reviews?.length ? (
-                    reviews.reviews.slice(0, 12).map((r) => (
-                      <div key={r.id} className="rounded-xl border border-white/10 bg-black/30 p-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="text-xs text-zinc-400 font-mono">{shortWallet(r.reviewer_wallet)}</div>
-                          <Stars value={Number(r.rating) || 0} />
+                    reviews.reviews.slice(0, 12).map((r) => {
+                      const name = (r.reviewer_name || "").trim() || shortWallet(r.reviewer_wallet);
+                      return (
+                        <div key={r.id} className="rounded-xl border border-white/10 bg-black/30 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <div className="h-8 w-8 overflow-hidden rounded-full border border-white/10 bg-white/5">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                {r.reviewer_pfp_url ? (
+                                  <img src={r.reviewer_pfp_url} alt="" className="h-full w-full object-cover" />
+                                ) : null}
+                              </div>
+
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-semibold">{name}</div>
+                                <div className="font-mono text-[11px] text-zinc-500">{shortWallet(r.reviewer_wallet)}</div>
+                              </div>
+                            </div>
+
+                            <Stars value={Number(r.rating) || 0} />
+                          </div>
+
+                          {r.comment ? (
+                            <div className="mt-2 text-sm text-zinc-200">{r.comment}</div>
+                          ) : (
+                            <div className="mt-2 text-sm text-zinc-500">No comment.</div>
+                          )}
+                          <div className="mt-2 text-[11px] text-zinc-500">{new Date(r.created_at).toLocaleString()}</div>
                         </div>
-                        {r.comment ? (
-                          <div className="mt-2 text-sm text-zinc-200">{r.comment}</div>
-                        ) : (
-                          <div className="mt-2 text-sm text-zinc-500">No comment.</div>
-                        )}
-                        <div className="mt-2 text-[11px] text-zinc-500">{new Date(r.created_at).toLocaleString()}</div>
-                      </div>
-                    ))
+                      );
+                    })
                   ) : (
                     <div className="text-sm text-zinc-500">No reviews yet.</div>
                   )}
@@ -492,7 +499,6 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
               </section>
             </div>
 
-            {/* Existing: updates + coins */}
             <div className="mt-6 grid gap-6 lg:grid-cols-2">
               <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
                 <h2 className="text-lg font-semibold">Updates</h2>
