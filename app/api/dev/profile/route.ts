@@ -3,6 +3,8 @@ import { cookies } from "next/headers";
 import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
+export const dynamic = "force-dynamic";
+
 async function requireWallet() {
   const cookieStore = await cookies();
   const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
@@ -14,6 +16,13 @@ async function requireDev(wallet: string) {
   const sb = supabaseAdmin();
   const { data } = await sb.from("users").select("role").eq("wallet", wallet).maybeSingle();
   return data?.role === "dev" || data?.role === "admin";
+}
+
+async function signedDevPostImageUrl(sb: ReturnType<typeof supabaseAdmin>, path?: string | null) {
+  if (!path) return null;
+  const { data, error } = await sb.storage.from("dev-posts").createSignedUrl(path, 60 * 30);
+  if (error) return null;
+  return data?.signedUrl ?? null;
 }
 
 export async function GET() {
@@ -28,17 +37,32 @@ export async function GET() {
 
   const profile = await sb.from("dev_profiles").select("*").eq("wallet", session.wallet).maybeSingle();
   const coins = await sb.from("coins").select("*").eq("wallet", session.wallet).order("created_at", { ascending: false });
-  const posts = await sb.from("dev_posts").select("*").eq("wallet", session.wallet).order("created_at", { ascending: false });
+
+  // IMPORTANT: include image_path
+  const postsRes = await sb
+    .from("dev_posts")
+    .select("*")
+    .eq("wallet", session.wallet)
+    .order("created_at", { ascending: false });
 
   if (profile.error) return NextResponse.json({ error: profile.error.message }, { status: 500 });
   if (coins.error) return NextResponse.json({ error: coins.error.message }, { status: 500 });
-  if (posts.error) return NextResponse.json({ error: posts.error.message }, { status: 500 });
+  if (postsRes.error) return NextResponse.json({ error: postsRes.error.message }, { status: 500 });
+
+  const postsRaw = postsRes.data ?? [];
+
+  const posts = await Promise.all(
+    postsRaw.map(async (p: any) => ({
+      ...p,
+      image_url: await signedDevPostImageUrl(sb, p.image_path ?? null)
+    }))
+  );
 
   return NextResponse.json({
     ok: true,
     profile: profile.data ?? null,
     coins: coins.data ?? [],
-    posts: posts.data ?? []
+    posts
   });
 }
 
@@ -85,8 +109,7 @@ export async function DELETE() {
 
   const sb = supabaseAdmin();
 
-  // deleting profile will cascade delete its content via wallet FK deletes? (coins/posts are FK to users, not profile)
-  // So we explicitly delete coins/posts, then profile.
+  // NOTE: if you want to ALSO delete storage images for dev posts, we can do that later.
   await sb.from("coins").delete().eq("wallet", session.wallet);
   await sb.from("dev_posts").delete().eq("wallet", session.wallet);
   await sb.from("dev_profiles").delete().eq("wallet", session.wallet);
