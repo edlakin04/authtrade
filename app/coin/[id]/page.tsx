@@ -20,6 +20,8 @@ type CommentRow = {
   id: string;
   coin_id: string;
   author_wallet: string;
+  author_name?: string | null;
+  author_pfp_url?: string | null;
   comment: string;
   created_at: string;
 };
@@ -30,8 +32,6 @@ type Live = {
   name: string | null;
   symbol: string | null;
   image: string | null;
-
-  // some dex pairs include image under different keys; we support fallback
   dexImage?: string | null;
 
   priceUsd: number | null;
@@ -68,7 +68,6 @@ function fmtUsd(n: number | null | undefined) {
   return n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 }
 
-// Better price formatting for tiny prices
 function fmtPrice(n: number | null | undefined) {
   if (n == null || !Number.isFinite(n)) return "—";
   const abs = Math.abs(n);
@@ -91,16 +90,13 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
   const [liveErr, setLiveErr] = useState<string | null>(null);
   const [liveLoading, setLiveLoading] = useState(false);
 
-  // dev display name
   const [devName, setDevName] = useState<string | null>(null);
 
-  // comments + upvotes on coin page
   const [comments, setComments] = useState<CommentRow[]>([]);
   const [commentLoading, setCommentLoading] = useState(false);
   const [commentText, setCommentText] = useState("");
   const [voteBusy, setVoteBusy] = useState(false);
 
-  // community (separate from comments)
   const [commLoading, setCommLoading] = useState(false);
   const [community, setCommunity] = useState<CoinCommunityResp["community"]>(null);
   const [viewerIsMember, setViewerIsMember] = useState(false);
@@ -120,7 +116,6 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
     return devName || shortAddr(wallet);
   }
 
-  // prefer live.image, then live.dexImage, else placeholder
   const logoUrl = useMemo(() => {
     return (live?.image || live?.dexImage || null) as string | null;
   }, [live?.image, live?.dexImage]);
@@ -189,7 +184,6 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
     setCommentText("");
     await loadComments(coin.id);
 
-    // bump count locally
     setCoin((prev) => (prev ? { ...prev, comments_count: prev.comments_count + 1 } : prev));
   }
 
@@ -276,7 +270,6 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
 
       await loadCommunity(coin.id);
       if (json?.community?.id) {
-        // optional: jump straight in
         window.location.href = `/community/${encodeURIComponent(json.community.id)}`;
       }
     } catch (e: any) {
@@ -286,14 +279,12 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
     }
   }
 
-  // initial load coin
   useEffect(() => {
     if (!coinId) return;
     loadCoin(coinId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coinId]);
 
-  // load dev name + comments + community when coin loads
   useEffect(() => {
     if (!coin) return;
     loadDevName(coin.dev_wallet);
@@ -302,7 +293,6 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coin?.id]);
 
-  // live load + polling every 30s
   useEffect(() => {
     if (!mint) return;
 
@@ -459,7 +449,6 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
               {live?.note ? <div className="mt-1">{live.note}</div> : null}
             </div>
 
-            {/* ✅ Community is its own thing (does NOT replace comments) */}
             <div className="mt-8 rounded-2xl border border-white/10 bg-white/5 p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
@@ -484,7 +473,6 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
                         </span>
                       )}
 
-                      {/* IMPORTANT: link uses community.id (not coin.id) */}
                       <Link
                         href={`/community/${encodeURIComponent(community.id)}`}
                         className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-black hover:bg-zinc-200"
@@ -509,7 +497,6 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
               {commErr ? <div className="mt-3 text-sm text-red-300">{commErr}</div> : null}
             </div>
 
-            {/* ✅ Back to COMMENTS (upvotes + comments) */}
             <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
@@ -555,15 +542,34 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
                   <div className="text-sm text-zinc-500">No comments yet.</div>
                 ) : (
                   <div className="max-h-[420px] space-y-2 overflow-auto pr-1">
-                    {comments.map((cm) => (
-                      <div key={cm.id} className="rounded-xl border border-white/10 bg-black/30 p-3">
-                        <div className="flex items-center justify-between gap-3 text-xs text-zinc-500">
-                          <span className="font-mono">{shortAddr(cm.author_wallet)}</span>
-                          <span>{new Date(cm.created_at).toLocaleString()}</span>
+                    {comments.map((cm) => {
+                      const name = (cm.author_name || "").trim() || shortAddr(cm.author_wallet);
+                      return (
+                        <div key={cm.id} className="rounded-xl border border-white/10 bg-black/30 p-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <div className="h-8 w-8 overflow-hidden rounded-full border border-white/10 bg-white/5">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                {cm.author_pfp_url ? (
+                                  <img src={cm.author_pfp_url} alt="" className="h-full w-full object-cover" />
+                                ) : null}
+                              </div>
+
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-semibold">{name}</div>
+                                <div className="font-mono text-[11px] text-zinc-500">{shortAddr(cm.author_wallet)}</div>
+                              </div>
+                            </div>
+
+                            <div className="shrink-0 text-[11px] text-zinc-500">
+                              {new Date(cm.created_at).toLocaleString()}
+                            </div>
+                          </div>
+
+                          <div className="mt-2 whitespace-pre-wrap break-words text-sm text-zinc-200">{cm.comment}</div>
                         </div>
-                        <div className="mt-2 whitespace-pre-wrap break-words text-sm text-zinc-200">{cm.comment}</div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
