@@ -27,7 +27,6 @@ export async function GET() {
     const sinceVotes48h = new Date(now - 48 * HOUR).toISOString();
 
     // --- Load dev profiles (candidate pool) ---
-    // Pull more than 12 so we can compute trending and pick top.
     const profilesRes = await sb
       .from("dev_profiles")
       .select("wallet, display_name, bio, pfp_url, x_url, updated_at")
@@ -41,7 +40,6 @@ export async function GET() {
     const devWallets = profiles.map((p) => p.wallet);
 
     // --- Trending signals ---
-    // 1) follows last 7d
     const followsRes = await sb
       .from("follows")
       .select("dev_wallet, created_at")
@@ -49,7 +47,6 @@ export async function GET() {
       .gte("created_at", sinceFollows7d)
       .limit(10000);
 
-    // 2) reviews last 90d (we derive 14d from this too)
     const reviewsRes = await sb
       .from("dev_reviews")
       .select("dev_wallet, rating, created_at")
@@ -57,7 +54,6 @@ export async function GET() {
       .gte("created_at", sinceReviews90d)
       .limit(10000);
 
-    // 3) coins posted by these devs in last 14d
     const coinsByDevRes = await sb
       .from("coins")
       .select("id, wallet, created_at")
@@ -65,7 +61,6 @@ export async function GET() {
       .gte("created_at", sinceCoins14d)
       .limit(1500);
 
-    // 4) votes last 48h for those coins (for coin traction)
     let coinVotesRes: { data: any[] | null; error: any } = { data: null, error: null };
     const coinIds = (coinsByDevRes.data ?? []).map((c) => c.id);
 
@@ -136,16 +131,11 @@ export async function GET() {
       devCoinScore.set(dev, (devCoinScore.get(dev) ?? 0) + decayScore);
     }
 
-    // Apply cap so one dev doesn’t dominate purely by coin spam
     for (const [dev, score] of devCoinScore.entries()) {
       devCoinScore.set(dev, Math.min(10, score));
     }
 
     // --- Compute final dev trending score ---
-    // follow_score = ln(1+follows_7d)*3
-    // rating_adj = (avg*count + 3.5*5) / (count+5)
-    // review_score = ln(1+reviews_14d) * rating_adj
-    // coin_score = capped sum of coin decay scores (max 10)
     const scoredProfiles = profiles
       .map((p) => {
         const w = p.wallet;
@@ -171,7 +161,6 @@ export async function GET() {
 
         return {
           ...p,
-          // extra fields (safe for UI to ignore)
           trending_score,
           follows_7d: f7,
           reviews_14d: r14,
@@ -183,27 +172,64 @@ export async function GET() {
       .sort((a, b) => (b.trending_score ?? 0) - (a.trending_score ?? 0))
       .slice(0, 12);
 
-    // --- Keep existing dashboard content unchanged ---
-    const posts = await sb
+    // --- Posts + coins ---
+    // ✅ include image_path so we can return image_url
+    const postsRes = await sb
       .from("dev_posts")
-      .select("id, wallet, content, created_at")
+      .select("id, wallet, content, image_path, created_at")
       .order("created_at", { ascending: false })
       .limit(20);
 
-    const coins = await sb
+    const coinsRes = await sb
       .from("coins")
       .select("id, wallet, token_address, title, description, created_at")
       .order("created_at", { ascending: false })
       .limit(30);
 
-    if (posts.error) return NextResponse.json({ error: posts.error.message }, { status: 500 });
-    if (coins.error) return NextResponse.json({ error: coins.error.message }, { status: 500 });
+    if (postsRes.error) return NextResponse.json({ error: postsRes.error.message }, { status: 500 });
+    if (coinsRes.error) return NextResponse.json({ error: coinsRes.error.message }, { status: 500 });
+
+    // ✅ sign post images
+    const bucketCandidates = ["dev_posts", "dev-posts", "posts", "devposts", "community"];
+
+    async function signFromAnyBucket(path?: string | null) {
+      if (!path) return null;
+
+      for (const bucket of bucketCandidates) {
+        try {
+          const { data, error } = await sb.storage.from(bucket).createSignedUrl(path, 60 * 30);
+          if (!error && data?.signedUrl) return data.signedUrl;
+        } catch {
+          // ignore and try next bucket
+        }
+      }
+
+      return null;
+    }
+
+    const rawPosts = postsRes.data ?? [];
+
+    const signedUrlById = new Map<string, string | null>();
+    await Promise.all(
+      rawPosts.map(async (p: any) => {
+        const url = await signFromAnyBucket(p?.image_path ?? null);
+        signedUrlById.set(String(p.id), url);
+      })
+    );
+
+    const posts = rawPosts.map((p: any) => ({
+      id: p.id,
+      wallet: p.wallet,
+      content: p.content,
+      created_at: p.created_at,
+      image_url: signedUrlById.get(String(p.id)) ?? null
+    }));
 
     return NextResponse.json({
       ok: true,
       profiles: scoredProfiles,
-      posts: posts.data ?? [],
-      coins: coins.data ?? []
+      posts,
+      coins: coinsRes.data ?? []
     });
   } catch (e: any) {
     return NextResponse.json(
