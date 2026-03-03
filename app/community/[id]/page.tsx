@@ -28,6 +28,7 @@ type CommunityPayload = {
     author_wallet: string;
     author_name?: string | null;
     author_pfp_url?: string | null;
+    is_dev?: boolean;
     text: string | null;
     image_url: string | null;
     created_at: string;
@@ -83,7 +84,7 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
   const [joinBusy, setJoinBusy] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
 
-  // ✅ coin live meta (for coin image in header)
+  // coin live meta (for coin image in header)
   const [coinLive, setCoinLive] = useState<LiveMeta | null>(null);
 
   useEffect(() => {
@@ -104,7 +105,7 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
     return `${t}${sym}`;
   }, [data?.community, data?.coin]);
 
-  // ✅ prefer coin-live image (same as coin page), fallback to API coin.image (usually null)
+  // prefer coin-live image (same as coin page), fallback to API coin.image (usually null)
   const headerLogoUrl = useMemo(() => {
     return (coinLive?.image || coinLive?.dexImage || data?.coin?.image || null) as string | null;
   }, [coinLive?.image, coinLive?.dexImage, data?.coin?.image]);
@@ -156,7 +157,7 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [communityId]);
 
-  // ✅ Load coin image/meta for header using /api/coin-live (matches coin page)
+  // Load coin image/meta for header using /api/coin-live (matches coin page)
   useEffect(() => {
     const mint = (data?.coin?.token_address || "").trim();
     if (!mint) {
@@ -464,7 +465,14 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
                               </div>
 
                               <div className="min-w-0">
-                                <div className="truncate text-sm font-semibold">{name}</div>
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <div className="truncate text-sm font-semibold">{name}</div>
+                                  {m.is_dev ? (
+                                    <span className="shrink-0 rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-zinc-200">
+                                      DEV
+                                    </span>
+                                  ) : null}
+                                </div>
                                 <div className="font-mono text-[11px] text-zinc-500">{shortAddr(m.author_wallet)}</div>
                               </div>
                             </div>
@@ -511,7 +519,7 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
                         onChange={(e) => {
                           const f = e.target.files?.[0] || null;
                           setImageFile(f);
-                          setImagePath(null); // need upload again for new file
+                          setImagePath(null);
                         }}
                       />
                     </label>
@@ -525,7 +533,7 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
                       {imagePath ? "Uploaded ✓" : imageUploading ? "Uploading…" : "Upload"}
                     </button>
 
-                    {(imageFile || imagePath) ? (
+                    {imageFile || imagePath ? (
                       <button
                         type="button"
                         onClick={clearImage}
@@ -543,9 +551,7 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
                     </div>
                   ) : null}
 
-                  <p className="mt-2 text-[11px] text-zinc-500">
-                    Upload first, then send. Images are private (signed URLs).
-                  </p>
+                  <p className="mt-2 text-[11px] text-zinc-500">Upload first, then send. Images are private (signed URLs).</p>
                 </div>
 
                 <button
