@@ -168,12 +168,15 @@ export async function GET(req: Request) {
           (typeof dp?.display_name === "string" && dp.display_name) ||
           null;
 
+        const is_dev = m.author_wallet === comm.dev_wallet;
+
         return {
           id: m.id,
           community_id: m.community_id,
           author_wallet: m.author_wallet,
           author_name,
           author_pfp_url: avatarByWallet.get(m.author_wallet) ?? null,
+          is_dev,
           text: m.content ?? null,
           image_url: imageUrlByMessageId.get(m.id) ?? null,
           created_at: m.created_at
