@@ -22,6 +22,7 @@ type CommentRow = {
   author_wallet: string;
   author_name?: string | null;
   author_pfp_url?: string | null;
+  is_dev?: boolean;
   comment: string;
   created_at: string;
 };
@@ -453,9 +454,7 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h2 className="text-lg font-semibold">Community</h2>
-                  <p className="mt-1 text-sm text-zinc-400">
-                    Private group chat for this coin (join to view messages).
-                  </p>
+                  <p className="mt-1 text-sm text-zinc-400">Private group chat for this coin (join to view messages).</p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -556,7 +555,14 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
                               </div>
 
                               <div className="min-w-0">
-                                <div className="truncate text-sm font-semibold">{name}</div>
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <div className="truncate text-sm font-semibold">{name}</div>
+                                  {cm.is_dev ? (
+                                    <span className="shrink-0 rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-zinc-200">
+                                      DEV
+                                    </span>
+                                  ) : null}
+                                </div>
                                 <div className="font-mono text-[11px] text-zinc-500">{shortAddr(cm.author_wallet)}</div>
                               </div>
                             </div>
