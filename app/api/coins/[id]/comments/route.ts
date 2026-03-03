@@ -26,9 +26,28 @@ async function signedUserPfp(sb: ReturnType<typeof supabaseAdmin>, path?: string
   return data?.signedUrl ?? null;
 }
 
+async function signedDevPfp(sb: ReturnType<typeof supabaseAdmin>, path?: string | null) {
+  if (!path) return null;
+  const { data, error } = await sb.storage.from("pfp").createSignedUrl(path, 60 * 30);
+  if (error) return null;
+  return data?.signedUrl ?? null;
+}
+
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const sb = supabaseAdmin();
+
+  // Grab coin owner dev wallet for DEV badge
+  const coinRes = await sb
+    .from("coins")
+    .select("dev_wallet, wallet")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (coinRes.error) return NextResponse.json({ error: coinRes.error.message }, { status: 500 });
+
+  const coinDevWallet =
+    (coinRes.data as any)?.dev_wallet || (coinRes.data as any)?.wallet || null;
 
   const { data, error } = await sb
     .from("coin_comments")
@@ -42,34 +61,59 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const rows = data ?? [];
   const wallets = Array.from(new Set(rows.map((r) => r.author_wallet).filter(Boolean)));
 
-  // fetch user profiles for commenters
-  const { data: profs } = await sb
+  // Prefer user_profiles
+  const { data: userProfs } = await sb
     .from("user_profiles")
     .select("wallet, display_name, pfp_path")
     .in("wallet", wallets);
 
-  const profByWallet = new Map<string, any>();
-  for (const p of profs ?? []) profByWallet.set(p.wallet, p);
+  const userByWallet = new Map<string, any>();
+  for (const p of userProfs ?? []) userByWallet.set(p.wallet, p);
 
+  // Fallback: dev_profiles
+  const { data: devProfs } = await sb
+    .from("dev_profiles")
+    .select("wallet, display_name, pfp_path")
+    .in("wallet", wallets);
+
+  const devByWallet = new Map<string, any>();
+  for (const p of devProfs ?? []) devByWallet.set(p.wallet, p);
+
+  // Pre-sign avatars (user bucket first, fallback dev bucket)
   const pfpUrlByWallet = new Map<string, string | null>();
   await Promise.all(
     wallets.map(async (w) => {
-      const p = profByWallet.get(w);
-      const url = await signedUserPfp(sb, p?.pfp_path ?? null);
-      pfpUrlByWallet.set(w, url);
+      const up = userByWallet.get(w);
+      if (up?.pfp_path) {
+        pfpUrlByWallet.set(w, await signedUserPfp(sb, up.pfp_path));
+        return;
+      }
+      const dp = devByWallet.get(w);
+      pfpUrlByWallet.set(w, await signedDevPfp(sb, dp?.pfp_path ?? null));
     })
   );
 
   return NextResponse.json({
     ok: true,
+    coinDevWallet,
     comments: rows.map((r) => {
-      const p = profByWallet.get(r.author_wallet);
+      const up = userByWallet.get(r.author_wallet);
+      const dp = devByWallet.get(r.author_wallet);
+
+      const author_name =
+        (typeof up?.display_name === "string" && up.display_name) ||
+        (typeof dp?.display_name === "string" && dp.display_name) ||
+        null;
+
+      const is_dev = !!coinDevWallet && r.author_wallet === coinDevWallet;
+
       return {
         id: r.id,
         coin_id: r.coin_id,
         author_wallet: r.author_wallet,
-        author_name: (p?.display_name ?? null) as string | null,
+        author_name,
         author_pfp_url: (pfpUrlByWallet.get(r.author_wallet) ?? null) as string | null,
+        is_dev,
         comment: r.comment,
         created_at: r.created_at
       };
