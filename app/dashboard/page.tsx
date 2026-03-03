@@ -237,6 +237,17 @@ export default function DashboardPage() {
     );
   }
 
+  // ✅ NEW helper: render post image if it exists
+  function PostImage({ url }: { url?: string | null }) {
+    if (!url) return null;
+    return (
+      <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-black/20">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={url} alt="" className="max-h-[520px] w-full object-cover" />
+      </div>
+    );
+  }
+
   const allMintsToHydrate = useMemo(() => {
     const t = (trendingCoins ?? []).slice(0, 12).map((c) => c.token_address).filter(Boolean);
 
@@ -349,6 +360,9 @@ export default function DashboardPage() {
                         </div>
 
                         <div className="mt-2 text-sm text-zinc-200">{x.content}</div>
+
+                        {/* ✅ NEW: show update image (if api provides x.image_url) */}
+                        <PostImage url={x.image_url ?? null} />
                       </div>
                     ))
                   )}
@@ -373,7 +387,9 @@ export default function DashboardPage() {
                             <div className="min-w-0 flex items-start gap-3">
                               <div className="mt-0.5 h-9 w-9 overflow-hidden rounded-xl border border-white/10 bg-white/5">
                                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                                {meta?.image ? <img src={meta.image} alt="" className="h-full w-full object-cover" /> : null}
+                                {meta?.image ? (
+                                  <img src={meta.image} alt="" className="h-full w-full object-cover" />
+                                ) : null}
                               </div>
 
                               <div className="min-w-0">
@@ -489,6 +505,9 @@ export default function DashboardPage() {
                       </div>
 
                       <div className="mt-2 text-sm text-zinc-200">{x.content}</div>
+
+                      {/* ✅ NEW: show update image (if api provides x.image_url) */}
+                      <PostImage url={x.image_url ?? null} />
                     </div>
                   ))
                 )}
