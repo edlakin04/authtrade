@@ -35,6 +35,17 @@ type CommunityPayload = {
   nextCursor?: string | null;
 };
 
+type LiveMeta = {
+  ok: true;
+  mint: string;
+  name: string | null;
+  symbol: string | null;
+  image: string | null;
+  dexImage?: string | null;
+  note?: string;
+  updatedAt?: string;
+};
+
 function shortAddr(s: string) {
   if (!s) return "";
   return `${s.slice(0, 4)}…${s.slice(-4)}`;
@@ -72,6 +83,9 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
   const [joinBusy, setJoinBusy] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
 
+  // ✅ coin live meta (for coin image in header)
+  const [coinLive, setCoinLive] = useState<LiveMeta | null>(null);
+
   useEffect(() => {
     (async () => {
       const p = await params;
@@ -89,6 +103,11 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
     const sym = coin?.symbol ? ` (${coin.symbol})` : "";
     return `${t}${sym}`;
   }, [data?.community, data?.coin]);
+
+  // ✅ prefer coin-live image (same as coin page), fallback to API coin.image (usually null)
+  const headerLogoUrl = useMemo(() => {
+    return (coinLive?.image || coinLive?.dexImage || data?.coin?.image || null) as string | null;
+  }, [coinLive?.image, coinLive?.dexImage, data?.coin?.image]);
 
   function mergeUniqueById(
     prev: NonNullable<CommunityPayload["messages"]>,
@@ -136,6 +155,35 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
     loadInitial();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [communityId]);
+
+  // ✅ Load coin image/meta for header using /api/coin-live (matches coin page)
+  useEffect(() => {
+    const mint = (data?.coin?.token_address || "").trim();
+    if (!mint) {
+      setCoinLive(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await fetch(`/api/coin-live?mint=${encodeURIComponent(mint)}`, { cache: "no-store" });
+        const json = await res.json().catch(() => null);
+        if (!res.ok) {
+          if (!cancelled) setCoinLive(null);
+          return;
+        }
+        if (!cancelled) setCoinLive(json as LiveMeta);
+      } catch {
+        if (!cancelled) setCoinLive(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [data?.coin?.token_address]);
 
   useEffect(() => {
     if (!communityId) return;
@@ -315,7 +363,7 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
             <div className="mt-3 flex items-center gap-3">
               <div className="h-10 w-10 overflow-hidden rounded-2xl border border-white/10 bg-white/5">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                {data?.coin?.image ? <img src={data.coin.image} alt="" className="h-full w-full object-cover" /> : null}
+                {headerLogoUrl ? <img src={headerLogoUrl} alt="" className="h-full w-full object-cover" /> : null}
               </div>
 
               <div className="min-w-0">
@@ -410,7 +458,9 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
                             <div className="flex min-w-0 items-center gap-2">
                               <div className="h-8 w-8 overflow-hidden rounded-full border border-white/10 bg-white/5">
                                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                                {m.author_pfp_url ? <img src={m.author_pfp_url} alt="" className="h-full w-full object-cover" /> : null}
+                                {m.author_pfp_url ? (
+                                  <img src={m.author_pfp_url} alt="" className="h-full w-full object-cover" />
+                                ) : null}
                               </div>
 
                               <div className="min-w-0">
