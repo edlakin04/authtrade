@@ -37,17 +37,11 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const { id } = await params;
   const sb = supabaseAdmin();
 
-  // Grab coin owner dev wallet for DEV badge
-  const coinRes = await sb
-    .from("coins")
-    .select("dev_wallet, wallet")
-    .eq("id", id)
-    .maybeSingle();
-
+  // IMPORTANT: your coins table uses `wallet` as the dev/owner wallet
+  const coinRes = await sb.from("coins").select("wallet").eq("id", id).maybeSingle();
   if (coinRes.error) return NextResponse.json({ error: coinRes.error.message }, { status: 500 });
 
-  const coinDevWallet =
-    (coinRes.data as any)?.dev_wallet || (coinRes.data as any)?.wallet || null;
+  const coinDevWallet = (coinRes.data?.wallet ?? null) as string | null;
 
   const { data, error } = await sb
     .from("coin_comments")
@@ -61,7 +55,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const rows = data ?? [];
   const wallets = Array.from(new Set(rows.map((r) => r.author_wallet).filter(Boolean)));
 
-  // Prefer user_profiles
+  // Prefer normal user profiles
   const { data: userProfs } = await sb
     .from("user_profiles")
     .select("wallet, display_name, pfp_path")
@@ -70,7 +64,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const userByWallet = new Map<string, any>();
   for (const p of userProfs ?? []) userByWallet.set(p.wallet, p);
 
-  // Fallback: dev_profiles
+  // Fallback: dev profiles (for devs who might not have user_profiles)
   const { data: devProfs } = await sb
     .from("dev_profiles")
     .select("wallet, display_name, pfp_path")
@@ -79,7 +73,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const devByWallet = new Map<string, any>();
   for (const p of devProfs ?? []) devByWallet.set(p.wallet, p);
 
-  // Pre-sign avatars (user bucket first, fallback dev bucket)
+  // Pre-sign avatars
   const pfpUrlByWallet = new Map<string, string | null>();
   await Promise.all(
     wallets.map(async (w) => {
@@ -95,7 +89,6 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
   return NextResponse.json({
     ok: true,
-    coinDevWallet,
     comments: rows.map((r) => {
       const up = userByWallet.get(r.author_wallet);
       const dp = devByWallet.get(r.author_wallet);
@@ -148,9 +141,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const sb = supabaseAdmin();
 
-  // ensure users row exists
   await sb.from("users").upsert({ wallet: session.wallet }, { onConflict: "wallet" });
-  // optional: ensure profile row exists (so they can later set name/pfp)
   await sb.from("user_profiles").upsert({ wallet: session.wallet }, { onConflict: "wallet" });
 
   const { error } = await sb.from("coin_comments").insert({
