@@ -16,7 +16,14 @@ type DevPayload = {
     x_url: string | null;
     updated_at: string;
   };
-  posts: { id: string; wallet: string; content: string; created_at: string }[];
+  posts: {
+    id: string;
+    wallet: string;
+    content: string;
+    created_at: string;
+    image_path?: string | null;
+    image_url?: string | null;
+  }[];
   coins: {
     id: string;
     wallet: string;
@@ -509,7 +516,16 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
                     data.posts.slice(0, 20).map((p) => (
                       <div key={p.id} className="rounded-xl border border-white/10 bg-black/30 p-4">
                         <div className="text-xs text-zinc-500">{new Date(p.created_at).toLocaleString()}</div>
-                        <div className="mt-1 text-sm text-zinc-200">{p.content}</div>
+
+                        {p.content ? <div className="mt-1 text-sm text-zinc-200">{p.content}</div> : null}
+
+                        {/* ✅ NEW: render post image (if any) */}
+                        {p.image_url ? (
+                          <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-black/40">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={p.image_url} alt="" className="w-full max-h-[420px] object-cover" />
+                          </div>
+                        ) : null}
                       </div>
                     ))
                   )}
