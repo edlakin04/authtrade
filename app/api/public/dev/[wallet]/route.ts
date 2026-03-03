@@ -87,10 +87,23 @@ export async function GET(_req: Request, { params }: { params: Promise<{ wallet:
     if (!followRes.error && followRes.data) isFollowing = true;
   }
 
+  // ✅ Followers count (public)
+  const followersCountRes = await sb
+    .from("follows")
+    .select("dev_wallet", { count: "exact", head: true })
+    .eq("dev_wallet", devWallet);
+
+  if (followersCountRes.error) {
+    return NextResponse.json({ error: followersCountRes.error.message }, { status: 500 });
+  }
+
+  const followersCount = followersCountRes.count ?? 0;
+
   return NextResponse.json({
     ok: true,
     viewerWallet,
     isFollowing,
+    followersCount,
     profile: profileRes.data,
     posts,
     coins: coinsRes.data ?? []
