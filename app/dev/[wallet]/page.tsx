@@ -8,6 +8,7 @@ type DevPayload = {
   ok: true;
   viewerWallet: string | null;
   isFollowing: boolean;
+  followersCount: number; // ✅ NEW
   profile: {
     wallet: string;
     display_name: string;
@@ -183,7 +184,7 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
       return;
     }
 
-    setData(json);
+    setData(json as DevPayload);
     await loadPfp(wallet);
   }
 
@@ -246,7 +247,7 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
         return;
       }
 
-      await loadDev(devWallet);
+      await loadDev(devWallet); // ✅ refresh follower count too
     } finally {
       setBusy(false);
     }
@@ -331,6 +332,7 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
 
   const avg = reviews?.avgRating ?? null;
   const count = reviews?.count ?? 0;
+  const followersCount = data?.followersCount ?? 0;
 
   return (
     <main className="min-h-screen bg-authswap text-white">
@@ -392,13 +394,25 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
                   </div>
                 </div>
 
+                {/* ✅ Reviews + Followers */}
                 <div className="rounded-2xl border border-white/10 bg-black/25 px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <div className="text-2xl font-semibold">{avg == null ? "—" : avg.toFixed(2)}</div>
-                    <div>
-                      <Stars value={avg ?? 0} />
+                  <div className="flex items-center gap-6">
+                    <div className="flex items-center gap-2">
+                      <div className="text-2xl font-semibold">{avg == null ? "—" : avg.toFixed(2)}</div>
+                      <div>
+                        <Stars value={avg ?? 0} />
+                        <div className="mt-1 text-xs text-zinc-400">
+                          {count} review{count === 1 ? "" : "s"}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="h-10 w-px bg-white/10" />
+
+                    <div className="text-right">
+                      <div className="text-2xl font-semibold">{followersCount}</div>
                       <div className="mt-1 text-xs text-zinc-400">
-                        {count} review{count === 1 ? "" : "s"}
+                        follower{followersCount === 1 ? "" : "s"}
                       </div>
                     </div>
                   </div>
@@ -519,7 +533,6 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
 
                         {p.content ? <div className="mt-1 text-sm text-zinc-200">{p.content}</div> : null}
 
-                        {/* ✅ NEW: render post image (if any) */}
                         {p.image_url ? (
                           <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-black/40">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
