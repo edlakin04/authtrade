@@ -4,6 +4,18 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import TopNav from "@/components/TopNav";
 
+type Message = {
+  id: string;
+  community_id: string;
+  author_wallet: string;
+  author_name?: string | null;
+  author_pfp_url?: string | null;
+  is_dev?: boolean;
+  text: string | null;
+  image_url: string | null;
+  created_at: string;
+};
+
 type CommunityPayload = {
   ok: true;
   community: {
@@ -14,6 +26,7 @@ type CommunityPayload = {
     created_at: string;
     viewerRole: "dev" | "member" | null;
     membersCount?: number;
+    pinned_message_id?: string | null;
   };
   coin?: {
     id: string;
@@ -22,17 +35,8 @@ type CommunityPayload = {
     symbol: string | null;
     image: string | null;
   } | null;
-  messages?: Array<{
-    id: string;
-    community_id: string;
-    author_wallet: string;
-    author_name?: string | null;
-    author_pfp_url?: string | null;
-    is_dev?: boolean;
-    text: string | null;
-    image_url: string | null;
-    created_at: string;
-  }>;
+  pinnedMessage?: Message | null;
+  messages?: Message[];
   nextCursor?: string | null;
 };
 
@@ -67,7 +71,7 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
   const [err, setErr] = useState<string | null>(null);
   const [data, setData] = useState<CommunityPayload | null>(null);
 
-  const [msgs, setMsgs] = useState<NonNullable<CommunityPayload["messages"]>>([]);
+  const [msgs, setMsgs] = useState<Message[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [olderBusy, setOlderBusy] = useState(false);
 
@@ -84,6 +88,9 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
   const [joinBusy, setJoinBusy] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
 
+  // pin busy
+  const [pinBusyId, setPinBusyId] = useState<string | null>(null);
+
   // coin live meta (for coin image in header)
   const [coinLive, setCoinLive] = useState<LiveMeta | null>(null);
 
@@ -96,6 +103,9 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
 
   const viewerRole = data?.community?.viewerRole ?? null;
   const isMember = viewerRole === "member" || viewerRole === "dev";
+  const isDevViewer = viewerRole === "dev";
+
+  const pinnedId = (data?.community?.pinned_message_id ?? null) as string | null;
 
   const headerTitle = useMemo(() => {
     const c = data?.community;
@@ -110,11 +120,8 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
     return (coinLive?.image || coinLive?.dexImage || data?.coin?.image || null) as string | null;
   }, [coinLive?.image, coinLive?.dexImage, data?.coin?.image]);
 
-  function mergeUniqueById(
-    prev: NonNullable<CommunityPayload["messages"]>,
-    incoming: NonNullable<CommunityPayload["messages"]>
-  ) {
-    const map = new Map<string, (typeof prev)[number]>();
+  function mergeUniqueById(prev: Message[], incoming: Message[]) {
+    const map = new Map<string, Message>();
     for (const m of prev) map.set(m.id, m);
     for (const m of incoming) map.set(m.id, m);
 
@@ -123,7 +130,7 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
     return all;
   }
 
-  async function loadInitial() {
+  async function loadInitial({ scrollToBottom = true }: { scrollToBottom?: boolean } = {}) {
     if (!communityId) return;
     setLoading(true);
     setErr(null);
@@ -136,12 +143,14 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
       if (!res.ok) throw new Error((json as any)?.error || "Failed to load community");
 
       setData(json as CommunityPayload);
-      setMsgs((json?.messages ?? []) as any);
+      setMsgs((json?.messages ?? []) as Message[]);
       setNextCursor(json?.nextCursor ?? null);
 
-      setTimeout(() => {
-        if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
-      }, 50);
+      if (scrollToBottom) {
+        setTimeout(() => {
+          if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+        }, 50);
+      }
     } catch (e: any) {
       setErr(e?.message ?? "Failed to load community");
       setData(null);
@@ -199,14 +208,9 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
         const json = (await res.json().catch(() => null)) as CommunityPayload | null;
         if (!res.ok || !json?.ok) return;
 
-        setMsgs((prev) => mergeUniqueById(prev, (json.messages ?? []) as any));
+        setMsgs((prev) => mergeUniqueById(prev, (json.messages ?? []) as Message[]));
         setNextCursor(json.nextCursor ?? null);
-
-        setData((prev) =>
-          prev
-            ? { ...prev, community: { ...prev.community, viewerRole: json.community.viewerRole } }
-            : (json as any)
-        );
+        setData(json as CommunityPayload);
       } catch {
         // ignore
       }
@@ -230,7 +234,7 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
       const json = (await res.json().catch(() => null)) as CommunityPayload | null;
       if (!res.ok) throw new Error((json as any)?.error || "Failed to load older messages");
 
-      setMsgs((prev) => mergeUniqueById(prev, (json?.messages ?? []) as any));
+      setMsgs((prev) => mergeUniqueById(prev, (json?.messages ?? []) as Message[]));
       setNextCursor(json?.nextCursor ?? null);
 
       if (listRef.current) listRef.current.scrollTop = 80;
@@ -300,7 +304,6 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
       if (!res.ok) throw new Error(json?.error || "Upload failed");
 
       setImagePath(json?.path ?? null);
-      // we keep the local preview (faster) until after send
     } catch (e: any) {
       alert(e?.message ?? "Upload failed");
     } finally {
@@ -317,7 +320,6 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
   async function send() {
     if (!communityId) return;
     const t = text.trim();
-
     if (!t && !imagePath) return;
 
     setSendBusy(true);
@@ -333,22 +335,96 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
       setText("");
       clearImage();
 
-      const res2 = await fetch(`/api/communities/${encodeURIComponent(communityId)}`, { cache: "no-store" });
-      const j2 = (await res2.json().catch(() => null)) as CommunityPayload | null;
-      if (res2.ok && j2?.ok) {
-        setMsgs((prev) => mergeUniqueById(prev, (j2.messages ?? []) as any));
-        setNextCursor(j2.nextCursor ?? null);
-      }
-
-      setTimeout(() => {
-        if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
-      }, 50);
+      await loadInitial({ scrollToBottom: true });
     } catch (e: any) {
       alert(e?.message ?? "Send failed");
     } finally {
       setSendBusy(false);
     }
   }
+
+  async function setPinned(messageIdOrNull: string | null) {
+    if (!communityId) return;
+    setPinBusyId(messageIdOrNull || "unpin");
+    try {
+      const res = await fetch(`/api/communities/${encodeURIComponent(communityId)}/pin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message_id: messageIdOrNull })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || "Pin failed");
+
+      // refresh payload to get pinnedMessage hydrated
+      await loadInitial({ scrollToBottom: false });
+    } catch (e: any) {
+      alert(e?.message ?? "Pin failed");
+    } finally {
+      setPinBusyId(null);
+    }
+  }
+
+  function MessageCard({ m }: { m: Message }) {
+    const name = (m.author_name || "").trim() || shortAddr(m.author_wallet);
+    const isPinned = pinnedId === m.id;
+
+    return (
+      <div className="rounded-2xl border border-white/10 bg-black/30 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="h-8 w-8 overflow-hidden rounded-full border border-white/10 bg-white/5">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              {m.author_pfp_url ? <img src={m.author_pfp_url} alt="" className="h-full w-full object-cover" /> : null}
+            </div>
+
+            <div className="min-w-0">
+              <div className="flex min-w-0 items-center gap-2">
+                <div className="truncate text-sm font-semibold">{name}</div>
+                {m.is_dev ? (
+                  <span className="shrink-0 rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-zinc-200">
+                    DEV
+                  </span>
+                ) : null}
+                {isPinned ? (
+                  <span className="shrink-0 rounded-full border border-white/10 bg-black/40 px-2 py-0.5 text-[10px] font-semibold text-zinc-200">
+                    📌 PINNED
+                  </span>
+                ) : null}
+              </div>
+              <div className="font-mono text-[11px] text-zinc-500">{shortAddr(m.author_wallet)}</div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="shrink-0 text-[11px] text-zinc-500">{fmtTime(m.created_at)}</div>
+
+            {isDevViewer ? (
+              <button
+                type="button"
+                onClick={() => setPinned(isPinned ? null : m.id)}
+                disabled={!!pinBusyId}
+                className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[11px] hover:bg-white/10 disabled:opacity-60"
+                title={isPinned ? "Unpin" : "Pin"}
+              >
+                {pinBusyId ? "…" : isPinned ? "Unpin" : "Pin"}
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        {m.text ? <div className="mt-2 whitespace-pre-wrap break-words text-sm text-zinc-200">{m.text}</div> : null}
+
+        {m.image_url ? (
+          <div className="mt-2 overflow-hidden rounded-xl border border-white/10 bg-black/20">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={m.image_url} alt="" className="max-h-[420px] w-full object-cover" />
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  const pinnedMessage = data?.pinnedMessage ?? null;
 
   return (
     <main className="min-h-screen bg-authswap text-white">
@@ -444,55 +520,34 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
                 )}
               </div>
 
+              {/* ✅ PINNED MESSAGE */}
+              {pinnedMessage ? (
+                <div className="mb-3 rounded-2xl border border-white/10 bg-black/40 p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="text-xs font-semibold text-zinc-200">📌 Pinned</div>
+                    {isDevViewer ? (
+                      <button
+                        type="button"
+                        onClick={() => setPinned(null)}
+                        disabled={!!pinBusyId}
+                        className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[11px] hover:bg-white/10 disabled:opacity-60"
+                      >
+                        {pinBusyId ? "…" : "Unpin"}
+                      </button>
+                    ) : null}
+                  </div>
+                  <MessageCard m={pinnedMessage} />
+                </div>
+              ) : null}
+
               <div ref={listRef} className="h-[520px] overflow-auto rounded-2xl border border-white/10 bg-black/30 p-3">
                 {msgs.length === 0 ? (
-                  <div className="flex h-full items-center justify-center text-sm text-zinc-500">
-                    No messages yet. Say hi 👋
-                  </div>
+                  <div className="flex h-full items-center justify-center text-sm text-zinc-500">No messages yet. Say hi 👋</div>
                 ) : (
                   <div className="space-y-2">
-                    {msgs.map((m) => {
-                      const name = (m.author_name || "").trim() || shortAddr(m.author_wallet);
-                      return (
-                        <div key={m.id} className="rounded-2xl border border-white/10 bg-black/30 p-3">
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <div className="h-8 w-8 overflow-hidden rounded-full border border-white/10 bg-white/5">
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                {m.author_pfp_url ? (
-                                  <img src={m.author_pfp_url} alt="" className="h-full w-full object-cover" />
-                                ) : null}
-                              </div>
-
-                              <div className="min-w-0">
-                                <div className="flex min-w-0 items-center gap-2">
-                                  <div className="truncate text-sm font-semibold">{name}</div>
-                                  {m.is_dev ? (
-                                    <span className="shrink-0 rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-zinc-200">
-                                      DEV
-                                    </span>
-                                  ) : null}
-                                </div>
-                                <div className="font-mono text-[11px] text-zinc-500">{shortAddr(m.author_wallet)}</div>
-                              </div>
-                            </div>
-
-                            <div className="shrink-0 text-[11px] text-zinc-500">{fmtTime(m.created_at)}</div>
-                          </div>
-
-                          {m.text ? (
-                            <div className="mt-2 whitespace-pre-wrap break-words text-sm text-zinc-200">{m.text}</div>
-                          ) : null}
-
-                          {m.image_url ? (
-                            <div className="mt-2 overflow-hidden rounded-xl border border-white/10 bg-black/20">
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img src={m.image_url} alt="" className="max-h-[420px] w-full object-cover" />
-                            </div>
-                          ) : null}
-                        </div>
-                      );
-                    })}
+                    {msgs.map((m) => (
+                      <MessageCard key={m.id} m={m} />
+                    ))}
                   </div>
                 )}
               </div>
