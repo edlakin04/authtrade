@@ -32,7 +32,7 @@ export async function GET(req: Request) {
 
     const { data: comm, error: commErr } = await sb
       .from("coin_communities")
-      .select("id, coin_id, dev_wallet, title, created_at")
+      .select("id, coin_id, dev_wallet, title, created_at, pinned_message_id")
       .eq("id", communityId)
       .maybeSingle();
 
@@ -74,9 +74,6 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const cursor = url.searchParams.get("cursor");
 
-    let messages: any[] = [];
-    let nextCursor: string | null = null;
-
     async function signedUserPfp(path?: string | null) {
       if (!path) return null;
       const { data, error } = await sb.storage.from("userpfp").createSignedUrl(path, 60 * 30);
@@ -98,7 +95,60 @@ export async function GET(req: Request) {
       return data?.signedUrl ?? null;
     }
 
+    // Helper to hydrate author for a list of messages
+    async function hydrateAuthors(rows: any[]) {
+      const authorWallets = Array.from(new Set(rows.map((m) => m.author_wallet).filter(Boolean)));
+
+      const { data: userProfs } = await sb
+        .from("user_profiles")
+        .select("wallet, display_name, pfp_path")
+        .in("wallet", authorWallets);
+
+      const userByWallet = new Map<string, any>();
+      for (const p of userProfs ?? []) userByWallet.set(p.wallet, p);
+
+      const { data: devProfs } = await sb
+        .from("dev_profiles")
+        .select("wallet, display_name, pfp_path")
+        .in("wallet", authorWallets);
+
+      const devByWallet = new Map<string, any>();
+      for (const p of devProfs ?? []) devByWallet.set(p.wallet, p);
+
+      const avatarByWallet = new Map<string, string | null>();
+      await Promise.all(
+        authorWallets.map(async (w) => {
+          const up = userByWallet.get(w);
+          if (up?.pfp_path) {
+            avatarByWallet.set(w, await signedUserPfp(up.pfp_path));
+            return;
+          }
+          const dp = devByWallet.get(w);
+          avatarByWallet.set(w, await signedDevPfp(dp?.pfp_path ?? null));
+        })
+      );
+
+      function nameFor(wallet: string) {
+        const up = userByWallet.get(wallet);
+        const dp = devByWallet.get(wallet);
+        return (
+          (typeof up?.display_name === "string" && up.display_name) ||
+          (typeof dp?.display_name === "string" && dp.display_name) ||
+          null
+        );
+      }
+
+      return { avatarByWallet, nameFor };
+    }
+
+    let messages: any[] = [];
+    let nextCursor: string | null = null;
+
+    // ✅ Pinned message payload
+    let pinnedMessage: any | null = null;
+
     if (viewerRole) {
+      // 1) Load messages page
       let q = sb
         .from("community_messages")
         .select("id, community_id, author_wallet, content, image_path, created_at")
@@ -116,42 +166,13 @@ export async function GET(req: Request) {
       const page = hasMore ? list.slice(0, 50) : list;
       nextCursor = hasMore && page.length ? page[page.length - 1].created_at : null;
 
+      // The UI wants ascending order
       const asc = [...page].reverse();
-      const authorWallets = Array.from(new Set(asc.map((m: any) => m.author_wallet).filter(Boolean)));
 
-      // Prefer normal user profiles
-      const { data: userProfs } = await sb
-        .from("user_profiles")
-        .select("wallet, display_name, pfp_path")
-        .in("wallet", authorWallets);
+      // 2) Hydrate authors + avatars
+      const { avatarByWallet, nameFor } = await hydrateAuthors(asc);
 
-      const userByWallet = new Map<string, any>();
-      for (const p of userProfs ?? []) userByWallet.set(p.wallet, p);
-
-      // Fallback: dev profiles (some authors might be devs)
-      const { data: devProfs } = await sb
-        .from("dev_profiles")
-        .select("wallet, display_name, pfp_path")
-        .in("wallet", authorWallets);
-
-      const devByWallet = new Map<string, any>();
-      for (const p of devProfs ?? []) devByWallet.set(p.wallet, p);
-
-      // Pre-sign avatars
-      const avatarByWallet = new Map<string, string | null>();
-      await Promise.all(
-        authorWallets.map(async (w) => {
-          const up = userByWallet.get(w);
-          if (up?.pfp_path) {
-            avatarByWallet.set(w, await signedUserPfp(up.pfp_path));
-            return;
-          }
-          const dp = devByWallet.get(w);
-          avatarByWallet.set(w, await signedDevPfp(dp?.pfp_path ?? null));
-        })
-      );
-
-      // Pre-sign message images
+      // 3) Sign message images
       const imageUrlByMessageId = new Map<string, string | null>();
       await Promise.all(
         asc.map(async (m: any) => {
@@ -160,21 +181,12 @@ export async function GET(req: Request) {
       );
 
       messages = asc.map((m: any) => {
-        const up = userByWallet.get(m.author_wallet);
-        const dp = devByWallet.get(m.author_wallet);
-
-        const author_name =
-          (typeof up?.display_name === "string" && up.display_name) ||
-          (typeof dp?.display_name === "string" && dp.display_name) ||
-          null;
-
         const is_dev = m.author_wallet === comm.dev_wallet;
-
         return {
           id: m.id,
           community_id: m.community_id,
           author_wallet: m.author_wallet,
-          author_name,
+          author_name: nameFor(m.author_wallet),
           author_pfp_url: avatarByWallet.get(m.author_wallet) ?? null,
           is_dev,
           text: m.content ?? null,
@@ -182,6 +194,33 @@ export async function GET(req: Request) {
           created_at: m.created_at
         };
       });
+
+      // 4) Load pinned message (if any)
+      if (comm.pinned_message_id) {
+        const { data: pinRow, error: pinErr } = await sb
+          .from("community_messages")
+          .select("id, community_id, author_wallet, content, image_path, created_at")
+          .eq("id", comm.pinned_message_id)
+          .maybeSingle();
+
+        if (!pinErr && pinRow && pinRow.community_id === comm.id) {
+          // ensure pinned author hydrated too (might not be in current page)
+          const { avatarByWallet: pinAvatarByWallet, nameFor: pinNameFor } = await hydrateAuthors([pinRow]);
+          const pinImg = await signedCommunityImage(pinRow.image_path ?? null);
+
+          pinnedMessage = {
+            id: pinRow.id,
+            community_id: pinRow.community_id,
+            author_wallet: pinRow.author_wallet,
+            author_name: pinNameFor(pinRow.author_wallet),
+            author_pfp_url: pinAvatarByWallet.get(pinRow.author_wallet) ?? null,
+            is_dev: pinRow.author_wallet === comm.dev_wallet,
+            text: pinRow.content ?? null,
+            image_url: pinImg ?? null,
+            created_at: pinRow.created_at
+          };
+        }
+      }
     }
 
     const coin = coinRow
@@ -190,8 +229,18 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       ok: true,
-      community: { ...comm, viewerRole, membersCount: membersCount ?? 0 },
+      community: {
+        id: comm.id,
+        coin_id: comm.coin_id,
+        dev_wallet: comm.dev_wallet,
+        title: comm.title,
+        created_at: comm.created_at,
+        viewerRole,
+        membersCount: membersCount ?? 0,
+        pinned_message_id: comm.pinned_message_id ?? null
+      },
       coin,
+      pinnedMessage,
       messages,
       nextCursor
     });
