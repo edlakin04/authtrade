@@ -299,15 +299,16 @@ export default function DevProfilePage() {
     const q = postPollQuestion.trim();
     const opts = postPollOptions.map((x) => x.trim()).filter(Boolean);
 
-    const includePoll = q.length > 0 || opts.some(Boolean);
-    if (includePoll) {
+    const pollStarted = q.length > 0 || opts.length > 0;
+    const pollValid = q.length >= 2 && opts.length >= 2;
+
+    if (pollStarted && !pollValid) {
       if (q.length < 2) return alert("Poll question is too short.");
       if (opts.length < 2) return alert("Poll needs at least 2 options.");
     }
 
-    // ✅ NEW: allow poll-only post (no update text required)
-    const hasSomething = content.length >= 2 || !!postFile || includePoll;
-    if (!hasSomething) return alert("Add text, an image, or a poll.");
+    const hasSomething = content.length >= 2 || !!postFile || pollValid;
+    if (!hasSomething) return alert("Add text, an image, or a poll with 2+ options.");
 
     setPostBusy(true);
     try {
@@ -317,7 +318,8 @@ export default function DevProfilePage() {
       if (content.length >= 2) fd.append("content", content);
       if (postFile) fd.append("file", postFile);
 
-      if (includePoll) {
+      // ✅ only send poll fields if poll is valid
+      if (pollValid) {
         fd.append("poll_question", q);
         fd.append("poll_options", JSON.stringify(opts));
       }
@@ -455,6 +457,11 @@ export default function DevProfilePage() {
       if (postPreview) URL.revokeObjectURL(postPreview);
     };
   }, [postPreview]);
+
+  const postButtonEnabled =
+    postContent.trim().length >= 2 ||
+    !!postFile ||
+    (postPollQuestion.trim().length >= 2 && postPollOptions.map((x) => x.trim()).filter(Boolean).length >= 2);
 
   return (
     <main className="min-h-screen bg-authswap text-white">
@@ -685,18 +692,9 @@ export default function DevProfilePage() {
                 ) : null}
               </div>
 
-              {/* ✅ CHANGED: allow post when poll-only or image-only */}
               <button
                 onClick={createPost}
-                disabled={
-                  postBusy ||
-                  !(
-                    postContent.trim().length >= 2 ||
-                    !!postFile ||
-                    (postPollQuestion.trim().length >= 2 &&
-                      postPollOptions.map((x) => x.trim()).filter(Boolean).length >= 2)
-                  )
-                }
+                disabled={postBusy || !postButtonEnabled}
                 className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
               >
                 {postBusy ? "Posting…" : "Post update"}
@@ -738,7 +736,9 @@ export default function DevProfilePage() {
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <h2 className="text-lg font-semibold">Coins</h2>
-                  <p className="mt-1 text-xs text-zinc-500">Coins you post are permanent and cannot be removed individually.</p>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Coins you post are permanent and cannot be removed individually.
+                  </p>
                 </div>
 
                 <span className="shrink-0 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
@@ -824,7 +824,9 @@ export default function DevProfilePage() {
 
                             <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
                             {c.description ? <div className="mt-1 text-xs text-zinc-300">{c.description}</div> : null}
-                            <div className="mt-2 text-[11px] text-zinc-500">{new Date(c.created_at).toLocaleString()}</div>
+                            <div className="mt-2 text-[11px] text-zinc-500">
+                              {new Date(c.created_at).toLocaleString()}
+                            </div>
                           </div>
                         </div>
 
