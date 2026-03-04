@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { cookies } from "next/headers";
+import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -20,17 +22,43 @@ type DevPostRow = {
   wallet: string;
   content: string | null;
   image_path: string | null;
+  poll_id: string | null;
   created_at: string;
 };
 
-type DevPostPollRow = {
+type PollRow = {
   id: string;
-  post_id: string;
+  wallet: string;
   question: string;
   created_at: string;
-  // If your table has more fields, we keep it flexible
-  [k: string]: any;
 };
+
+type PollOptionRow = {
+  id: string;
+  poll_id: string;
+  label: string;
+  sort_order: number;
+  created_at: string;
+};
+
+type PollVoteRow = {
+  poll_id: string;
+  option_id: string;
+  voter_wallet: string;
+  created_at: string;
+};
+
+async function getViewerWallet(): Promise<string | null> {
+  try {
+    const cookieStore = await cookies();
+    const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+    if (!sessionToken) return null;
+    const session = await readSessionToken(sessionToken).catch(() => null);
+    return session?.wallet ?? null;
+  } catch {
+    return null;
+  }
+}
 
 export async function GET() {
   try {
@@ -190,10 +218,10 @@ export async function GET() {
       .slice(0, 12);
 
     // --- Posts + coins ---
-    // Keep this EXACTLY like before (so dashboard doesn't break)
+    // IMPORTANT: include poll_id so we can hydrate polls
     const postsRes = await sb
       .from("dev_posts")
-      .select("id, wallet, content, image_path, created_at")
+      .select("id, wallet, content, image_path, poll_id, created_at")
       .order("created_at", { ascending: false })
       .limit(20);
 
@@ -233,50 +261,96 @@ export async function GET() {
       })
     );
 
-    // -------------------------
-    // ✅ ADD DEV POST POLLS (non-breaking)
-    // We DO NOT join in a way that can filter posts.
-    // We fetch polls separately and attach poll info to matching posts.
-    // -------------------------
-    let pollsByPostId = new Map<string, DevPostPollRow>();
+    // ✅ Hydrate polls using dev_posts.poll_id -> dev_post_polls.id
+    const viewerWallet = await getViewerWallet();
 
-    try {
+    const pollIds = Array.from(
+      new Set(rawPosts.map((p) => (p.poll_id ? String(p.poll_id) : null)).filter(Boolean) as string[])
+    );
+
+    const pollById = new Map<string, PollRow>();
+    const optionsByPollId = new Map<string, PollOptionRow[]>();
+    const countsByPollId = new Map<string, Map<string, number>>();
+    const viewerVoteByPollId = new Map<string, string | null>(); // option_id
+
+    if (pollIds.length) {
+      // polls
       const pollsRes = await sb
         .from("dev_post_polls")
-        .select("id, post_id, question, created_at")
-        .order("created_at", { ascending: false })
-        .limit(50);
+        .select("id, wallet, question, created_at")
+        .in("id", pollIds);
 
       if (!pollsRes.error) {
-        for (const row of (pollsRes.data ?? []) as DevPostPollRow[]) {
-          if (row?.post_id) pollsByPostId.set(String(row.post_id), row);
+        for (const p of (pollsRes.data ?? []) as PollRow[]) pollById.set(String(p.id), p);
+      }
+
+      // options
+      const optsRes = await sb
+        .from("dev_post_poll_options")
+        .select("id, poll_id, label, sort_order, created_at")
+        .in("poll_id", pollIds)
+        .order("sort_order", { ascending: true });
+
+      if (!optsRes.error) {
+        for (const o of (optsRes.data ?? []) as PollOptionRow[]) {
+          const pid = String(o.poll_id);
+          if (!optionsByPollId.has(pid)) optionsByPollId.set(pid, []);
+          optionsByPollId.get(pid)!.push(o);
         }
       }
-    } catch {
-      // If polls table doesn't exist yet in some env, don't break dashboard.
-      pollsByPostId = new Map();
+
+      // votes (aggregate)
+      const votesRes = await sb
+        .from("dev_post_poll_votes")
+        .select("poll_id, option_id, voter_wallet, created_at")
+        .in("poll_id", pollIds)
+        .limit(20000);
+
+      if (!votesRes.error) {
+        const votes = (votesRes.data ?? []) as PollVoteRow[];
+        for (const v of votes) {
+          const pid = String(v.poll_id);
+          const oid = String(v.option_id);
+
+          if (!countsByPollId.has(pid)) countsByPollId.set(pid, new Map());
+          const m = countsByPollId.get(pid)!;
+          m.set(oid, (m.get(oid) ?? 0) + 1);
+
+          if (viewerWallet && String(v.voter_wallet) === viewerWallet) {
+            viewerVoteByPollId.set(pid, oid);
+          }
+        }
+      }
     }
 
     const posts = rawPosts.map((p) => {
-      const poll = pollsByPostId.get(String(p.id)) ?? null;
+      const pollId = p.poll_id ? String(p.poll_id) : null;
+
+      const pollRow = pollId ? pollById.get(pollId) ?? null : null;
+      const optionRows = pollId ? optionsByPollId.get(pollId) ?? [] : [];
+      const counts = pollId ? countsByPollId.get(pollId) ?? new Map() : new Map();
+      const viewerVote = pollId ? viewerVoteByPollId.get(pollId) ?? null : null;
 
       return {
         id: p.id,
         wallet: p.wallet,
-        // IMPORTANT: keep `content` in the payload exactly like before.
-        // (If your DB guarantees content NOT NULL, this is always a string anyway.)
         content: p.content,
         created_at: p.created_at,
         image_url: signedUrlById.get(String(p.id)) ?? null,
-
-        // ✅ extra (safe): dashboard can ignore it
-        poll: poll
-          ? {
-              id: poll.id,
-              question: poll.question,
-              created_at: poll.created_at
-            }
-          : null
+        // ✅ This is what your UI needs to render the actual poll
+        poll:
+          pollRow && optionRows.length
+            ? {
+                id: pollRow.id,
+                question: pollRow.question,
+                options: optionRows.map((o) => ({
+                  id: o.id,
+                  label: o.label,
+                  votes: counts.get(String(o.id)) ?? 0
+                })),
+                viewer_vote: viewerVote
+              }
+            : null
       };
     });
 
