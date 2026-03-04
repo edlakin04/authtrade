@@ -34,17 +34,51 @@ function safeTrim(v: any): string | null {
   return t ? t : null;
 }
 
+function parsePollOptionsFromFormData(fd: FormData): string[] {
+  // UI currently sends: fd.append("poll_options", JSON.stringify(opts))
+  const rawAll = fd.getAll("poll_options");
+
+  // If multiple fields were appended (rare), treat them as raw labels.
+  // BUT if it’s a single JSON string, parse it.
+  if (rawAll.length === 1 && typeof rawAll[0] === "string") {
+    const one = (rawAll[0] as string).trim();
+
+    // Try JSON first
+    if (one.startsWith("[") || one.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(one);
+        return normalizeOptions(parsed);
+      } catch {
+        // fall through
+      }
+    }
+
+    // Otherwise treat it as a single label
+    return normalizeOptions([one]);
+  }
+
+  // Multiple values: treat as labels
+  return rawAll
+    .map((x) => (typeof x === "string" ? x.trim() : ""))
+    .filter(Boolean)
+    .slice(0, 6);
+}
+
+function sanitizeFilename(name: string) {
+  return (name || "file").replace(/[^\w.\-]+/g, "_").slice(0, 120);
+}
+
 async function uploadDevPostFile(sb: ReturnType<typeof supabaseAdmin>, wallet: string, file: File) {
-  // Put in dev-posts bucket (matches your other code)
   const bucket = "dev-posts";
 
-  const ext = (() => {
-    const name = (file.name || "").toLowerCase();
-    const i = name.lastIndexOf(".");
-    return i >= 0 ? name.slice(i + 1) : "bin";
-  })();
+  // Basic size guard (5MB)
+  const maxBytes = 5 * 1024 * 1024;
+  if (typeof (file as any)?.size === "number" && (file as any).size > maxBytes) {
+    throw new Error("Image too large (max 5MB).");
+  }
 
-  const path = `posts/${wallet}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+  const filename = sanitizeFilename((file as any)?.name || "image");
+  const path = `posts/${wallet}/${Date.now()}-${crypto.randomUUID()}-${filename}`;
 
   const arrayBuffer = await file.arrayBuffer();
   const bytes = new Uint8Array(arrayBuffer);
@@ -82,27 +116,7 @@ export async function POST(req: Request) {
 
       content = safeTrim(fd.get("content"));
       pollQuestion = safeTrim(fd.get("poll_question"));
-
-      // poll_options can be:
-      // - repeated poll_options fields
-      // - a JSON string in poll_options
-      const optsAll = fd.getAll("poll_options");
-      if (optsAll?.length) {
-        pollOptions = optsAll
-          .map((x) => (typeof x === "string" ? x.trim() : ""))
-          .filter(Boolean)
-          .slice(0, 6);
-      } else {
-        const optsStr = fd.get("poll_options");
-        if (typeof optsStr === "string") {
-          try {
-            const parsed = JSON.parse(optsStr);
-            pollOptions = normalizeOptions(parsed);
-          } catch {
-            // ignore
-          }
-        }
-      }
+      pollOptions = parsePollOptionsFromFormData(fd);
 
       const file = fd.get("file");
       if (file && typeof file !== "string") {
@@ -120,8 +134,10 @@ export async function POST(req: Request) {
       pollOptions = normalizeOptions(body?.poll_options);
     }
 
-    // ✅ allow poll-only post (no content required)
-    const hasPoll = !!(pollQuestion && pollOptions.length >= 2);
+    // ✅ poll valid only if question + 2+ options
+    const hasPoll = !!(pollQuestion && pollQuestion.length >= 2 && pollOptions.length >= 2);
+
+    // ✅ allow poll-only, image-only, or text-only
     const hasAny = !!(content || image_path || hasPoll);
 
     if (!hasAny) {
@@ -135,7 +151,7 @@ export async function POST(req: Request) {
 
     /* ---------------- CREATE POLL ---------------- */
     if (hasPoll) {
-      // IMPORTANT: your schema uses "wallet" (NOT dev_wallet)
+      // ✅ matches your SQL: dev_post_polls.wallet
       const { data: poll, error: pollErr } = await sb
         .from("dev_post_polls")
         .insert({
@@ -160,18 +176,19 @@ export async function POST(req: Request) {
     }
 
     /* ---------------- CREATE POST ---------------- */
-    // ✅ DB best practice: make dev_posts.content nullable.
-    // But if you haven’t migrated yet, we still avoid NULL by providing a fallback string.
+    // ✅ IMPORTANT: dev_posts.content is NOT NULL in your DB
+    // Always send a non-null string.
     const finalContent =
       content ??
-      (pollId ? "📊 Poll" : null) ??
-      (image_path ? " " : null); // last resort if content is NOT NULL in DB
+      (hasPoll ? pollQuestion! : null) ??
+      (image_path ? "" : "") ??
+      "";
 
     const { data: post, error: postErr } = await sb
       .from("dev_posts")
       .insert({
         wallet: viewerWallet,
-        content: finalContent,
+        content: finalContent, // ✅ never null
         image_path,
         poll_id: pollId
       })
