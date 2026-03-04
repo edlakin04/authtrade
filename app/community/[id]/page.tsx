@@ -4,6 +4,19 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import TopNav from "@/components/TopNav";
 
+type PollOption = {
+  id: string;
+  label: string;
+  votes: number;
+};
+
+type Poll = {
+  id: string;
+  question: string;
+  options: PollOption[];
+  viewer_vote?: string | null; // option_id or null
+};
+
 type Message = {
   id: string;
   community_id: string;
@@ -13,6 +26,7 @@ type Message = {
   is_dev?: boolean;
   text: string | null;
   image_url: string | null;
+  poll?: Poll | null; // ✅ NEW
   created_at: string;
 };
 
@@ -84,6 +98,11 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
   const [imageUploading, setImageUploading] = useState(false);
   const [imagePath, setImagePath] = useState<string | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+
+  // ✅ poll composer (dev-only)
+  const [pollQuestion, setPollQuestion] = useState("");
+  const [pollOptions, setPollOptions] = useState<string[]>(["", ""]);
+  const [pollBusy, setPollBusy] = useState(false);
 
   const [joinBusy, setJoinBusy] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -364,6 +383,99 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
     }
   }
 
+  // ✅ Vote in a community poll
+  async function votePoll(pollId: string, optionId: string) {
+    if (!communityId) return;
+    try {
+      const res = await fetch(`/api/communities/${encodeURIComponent(communityId)}/polls/${encodeURIComponent(pollId)}/vote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ option_id: optionId })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || "Vote failed");
+
+      // refresh to update counts + viewer_vote
+      await loadInitial({ scrollToBottom: false });
+    } catch (e: any) {
+      alert(e?.message ?? "Vote failed");
+    }
+  }
+
+  // ✅ Create a poll (dev only) in this community
+  async function createPoll() {
+    if (!communityId) return;
+
+    const q = pollQuestion.trim();
+    const opts = pollOptions.map((x) => x.trim()).filter(Boolean);
+
+    if (q.length < 2) return alert("Poll question is too short.");
+    if (opts.length < 2) return alert("Poll needs at least 2 options.");
+
+    setPollBusy(true);
+    try {
+      const res = await fetch(`/api/communities/${encodeURIComponent(communityId)}/polls`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: q, options: opts })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || "Create poll failed");
+
+      setPollQuestion("");
+      setPollOptions(["", ""]);
+      await loadInitial({ scrollToBottom: true });
+    } catch (e: any) {
+      alert(e?.message ?? "Create poll failed");
+    } finally {
+      setPollBusy(false);
+    }
+  }
+
+  function PollCard({ poll }: { poll: Poll }) {
+    const total = (poll.options ?? []).reduce((sum, o) => sum + (Number(o.votes) || 0), 0);
+
+    return (
+      <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3">
+        <div className="text-sm font-semibold text-zinc-100">{poll.question}</div>
+
+        <div className="mt-2 space-y-2">
+          {(poll.options ?? []).map((o) => {
+            const votes = Number(o.votes) || 0;
+            const pct = total > 0 ? Math.round((votes / total) * 100) : 0;
+            const voted = poll.viewer_vote === o.id;
+
+            return (
+              <button
+                key={o.id}
+                type="button"
+                onClick={() => votePoll(poll.id, o.id)}
+                className={[
+                  "w-full overflow-hidden rounded-xl border border-white/10 p-2 text-left",
+                  voted ? "bg-white/10" : "bg-black/30 hover:bg-black/40"
+                ].join(" ")}
+                title={voted ? "You voted for this" : "Vote"}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0 truncate text-sm text-zinc-200">{o.label}</div>
+                  <div className="shrink-0 text-[11px] text-zinc-400">
+                    {pct}% • {votes}
+                  </div>
+                </div>
+
+                <div className="mt-2 h-2 w-full rounded-full bg-black/40">
+                  <div className="h-2 rounded-full bg-white" style={{ width: `${pct}%` }} />
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-2 text-[11px] text-zinc-500">{total} total vote{total === 1 ? "" : "s"}</div>
+      </div>
+    );
+  }
+
   function MessageCard({ m }: { m: Message }) {
     const name = (m.author_name || "").trim() || shortAddr(m.author_wallet);
     const isPinned = pinnedId === m.id;
@@ -420,6 +532,9 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
             <img src={m.image_url} alt="" className="max-h-[420px] w-full object-cover" />
           </div>
         ) : null}
+
+        {/* ✅ poll */}
+        {m.poll ? <PollCard poll={m.poll} /> : null}
       </div>
     );
   }
@@ -554,6 +669,78 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
 
               {/* Composer */}
               <div className="mt-3 grid gap-2">
+                {/* ✅ DEV ONLY: poll composer */}
+                {isDevViewer ? (
+                  <div className="rounded-2xl border border-white/10 bg-black/40 p-3">
+                    <div className="text-xs font-semibold text-zinc-200">Create a poll (dev only)</div>
+
+                    <input
+                      className="mt-2 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm"
+                      placeholder="Poll question…"
+                      value={pollQuestion}
+                      onChange={(e) => setPollQuestion(e.target.value)}
+                      disabled={pollBusy}
+                    />
+
+                    <div className="mt-2 grid gap-2">
+                      {pollOptions.map((v, idx) => (
+                        <div key={idx} className="flex items-center gap-2">
+                          <input
+                            className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm"
+                            placeholder={`Option ${idx + 1}`}
+                            value={v}
+                            onChange={(e) => {
+                              const next = [...pollOptions];
+                              next[idx] = e.target.value;
+                              setPollOptions(next);
+                            }}
+                            disabled={pollBusy}
+                          />
+                          {pollOptions.length > 2 ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next = pollOptions.filter((_, i) => i !== idx);
+                                setPollOptions(next);
+                              }}
+                              disabled={pollBusy}
+                              className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10 disabled:opacity-60"
+                              title="Remove option"
+                            >
+                              Remove
+                            </button>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (pollOptions.length >= 6) return;
+                          setPollOptions((prev) => [...prev, ""]);
+                        }}
+                        disabled={pollBusy || pollOptions.length >= 6}
+                        className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10 disabled:opacity-60"
+                      >
+                        Add option
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={createPoll}
+                        disabled={pollBusy}
+                        className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+                      >
+                        {pollBusy ? "Creating…" : "Create poll"}
+                      </button>
+                    </div>
+
+                    <p className="mt-2 text-[11px] text-zinc-500">Polls appear in chat like a pinned-style card. Members can vote.</p>
+                  </div>
+                ) : null}
+
                 <textarea
                   className="min-h-[90px] w-full rounded-2xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
                   placeholder="Write a message…"
