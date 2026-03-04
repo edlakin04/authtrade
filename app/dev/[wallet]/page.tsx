@@ -4,6 +4,19 @@ import React, { useEffect, useMemo, useState } from "react";
 import TopNav from "@/components/TopNav";
 import Link from "next/link";
 
+type PollOption = {
+  id: string;
+  label: string;
+  votes: number;
+};
+
+type Poll = {
+  id: string;
+  question: string;
+  options: PollOption[];
+  viewer_vote?: string | null; // option_id or null
+};
+
 type DevPayload = {
   ok: true;
   viewerWallet: string | null;
@@ -24,6 +37,9 @@ type DevPayload = {
     created_at: string;
     image_path?: string | null;
     image_url?: string | null;
+
+    // ✅ NEW: optional poll attached to dev update post
+    poll?: Poll | null;
   }[];
   coins: {
     id: string;
@@ -147,6 +163,9 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
 
   const [metaByMint, setMetaByMint] = useState<Record<string, LiveMeta | null>>({});
   const [metaLoadingMints, setMetaLoadingMints] = useState<Record<string, boolean>>({});
+
+  // ✅ poll vote busy keyed by poll id
+  const [pollVoteBusyById, setPollVoteBusyById] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     (async () => {
@@ -287,6 +306,80 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
     } finally {
       setSubmitBusy(false);
     }
+  }
+
+  // ✅ vote on a poll attached to a dev update post
+  async function voteDevPostPoll(pollId: string, optionId: string) {
+    if (!data?.viewerWallet) {
+      alert("Sign in first (Get Started) to vote.");
+      return;
+    }
+
+    setPollVoteBusyById((prev) => ({ ...prev, [pollId]: true }));
+    try {
+      const res = await fetch(`/api/dev/posts/polls/${encodeURIComponent(pollId)}/vote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ option_id: optionId })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(json?.error ?? "Vote failed");
+        return;
+      }
+
+      await loadDev(devWallet);
+    } finally {
+      setPollVoteBusyById((prev) => ({ ...prev, [pollId]: false }));
+    }
+  }
+
+  function PollCard({ poll }: { poll: Poll }) {
+    const total = (poll.options ?? []).reduce((sum, o) => sum + (Number(o.votes) || 0), 0);
+    const voteBusy = !!pollVoteBusyById[poll.id];
+
+    return (
+      <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3">
+        <div className="text-sm font-semibold text-zinc-100">{poll.question}</div>
+
+        <div className="mt-2 space-y-2">
+          {(poll.options ?? []).map((o) => {
+            const votes = Number(o.votes) || 0;
+            const pct = total > 0 ? Math.round((votes / total) * 100) : 0;
+            const voted = poll.viewer_vote === o.id;
+
+            return (
+              <button
+                key={o.id}
+                type="button"
+                disabled={voteBusy}
+                onClick={() => voteDevPostPoll(poll.id, o.id)}
+                className={[
+                  "w-full overflow-hidden rounded-xl border border-white/10 p-2 text-left disabled:opacity-60",
+                  voted ? "bg-white/10" : "bg-black/30 hover:bg-black/40"
+                ].join(" ")}
+                title={voted ? "You voted for this" : "Vote"}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0 truncate text-sm text-zinc-200">{o.label}</div>
+                  <div className="shrink-0 text-[11px] text-zinc-400">
+                    {pct}% • {votes}
+                  </div>
+                </div>
+
+                <div className="mt-2 h-2 w-full rounded-full bg-black/40">
+                  <div className="h-2 rounded-full bg-white" style={{ width: `${pct}%` }} />
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-2 text-[11px] text-zinc-500">
+          {voteBusy ? "Updating…" : `${total} total vote${total === 1 ? "" : "s"}`}
+        </div>
+      </div>
+    );
   }
 
   async function fetchCoinMeta(mint: string) {
@@ -539,6 +632,8 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
                             <img src={p.image_url} alt="" className="w-full max-h-[420px] object-cover" />
                           </div>
                         ) : null}
+
+                        {p.poll ? <PollCard poll={p.poll} /> : null}
                       </div>
                     ))
                   )}
