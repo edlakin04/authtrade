@@ -4,6 +4,19 @@ import React, { useEffect, useMemo, useState } from "react";
 import TopNav from "@/components/TopNav";
 import Link from "next/link";
 
+type PollOption = {
+  id: string;
+  label: string;
+  votes: number;
+};
+
+type Poll = {
+  id: string;
+  question: string;
+  options: PollOption[];
+  viewer_vote?: string | null; // option_id or null
+};
+
 type Profile = {
   wallet: string;
   display_name: string;
@@ -25,9 +38,13 @@ type Post = {
   id: string;
   content: string;
   created_at: string;
-  // ✅ new (either/both depending on your API)
-  image_url?: string | null; // signed URL (recommended to return from API)
-  image_path?: string | null; // storage path (if you prefer to sign elsewhere)
+
+  // ✅ optional image (existing)
+  image_url?: string | null; // signed URL
+  image_path?: string | null; // storage path
+
+  // ✅ NEW: optional poll attached to dev update post
+  poll?: Poll | null;
 };
 
 type LiveMeta = {
@@ -67,6 +84,11 @@ export default function DevProfilePage() {
   const [postContent, setPostContent] = useState("");
   const [postFile, setPostFile] = useState<File | null>(null);
   const [postBusy, setPostBusy] = useState(false);
+
+  // ✅ poll composer for dev update post
+  const [postPollQuestion, setPostPollQuestion] = useState("");
+  const [postPollOptions, setPostPollOptions] = useState<string[]>(["", ""]);
+  const [postPollBusy, setPostPollBusy] = useState(false);
 
   const [coinAddr, setCoinAddr] = useState("");
   const [coinTitle, setCoinTitle] = useState("");
@@ -270,16 +292,30 @@ export default function DevProfilePage() {
     }
   }
 
-  // ✅ Create update with optional image
+  // ✅ Create update with optional image and/or poll
   async function createPost() {
     const content = postContent.trim();
     if (content.length < 2) return alert("Post too short");
+
+    const q = postPollQuestion.trim();
+    const opts = postPollOptions.map((x) => x.trim()).filter(Boolean);
+
+    const includePoll = q.length > 0 || opts.some(Boolean);
+    if (includePoll) {
+      if (q.length < 2) return alert("Poll question is too short.");
+      if (opts.length < 2) return alert("Poll needs at least 2 options.");
+    }
 
     setPostBusy(true);
     try {
       const fd = new FormData();
       fd.append("content", content);
       if (postFile) fd.append("file", postFile);
+
+      if (includePoll) {
+        fd.append("poll_question", q);
+        fd.append("poll_options", JSON.stringify(opts));
+      }
 
       const res = await fetch("/api/dev/posts", {
         method: "POST",
@@ -291,10 +327,74 @@ export default function DevProfilePage() {
 
       setPostContent("");
       setPostFile(null);
+      setPostPollQuestion("");
+      setPostPollOptions(["", ""]);
+
       await refresh();
     } finally {
       setPostBusy(false);
     }
+  }
+
+  // ✅ vote on a poll attached to a dev update post
+  async function voteDevPostPoll(pollId: string, optionId: string) {
+    try {
+      const res = await fetch(`/api/dev/posts/polls/${encodeURIComponent(pollId)}/vote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ option_id: optionId })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return alert(data?.error ?? "Vote failed");
+
+      await refresh();
+    } catch (e: any) {
+      alert(e?.message ?? "Vote failed");
+    }
+  }
+
+  function PollCard({ poll }: { poll: Poll }) {
+    const total = (poll.options ?? []).reduce((sum, o) => sum + (Number(o.votes) || 0), 0);
+
+    return (
+      <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3">
+        <div className="text-sm font-semibold text-zinc-100">{poll.question}</div>
+
+        <div className="mt-2 space-y-2">
+          {(poll.options ?? []).map((o) => {
+            const votes = Number(o.votes) || 0;
+            const pct = total > 0 ? Math.round((votes / total) * 100) : 0;
+            const voted = poll.viewer_vote === o.id;
+
+            return (
+              <button
+                key={o.id}
+                type="button"
+                onClick={() => voteDevPostPoll(poll.id, o.id)}
+                className={[
+                  "w-full overflow-hidden rounded-xl border border-white/10 p-2 text-left",
+                  voted ? "bg-white/10" : "bg-black/30 hover:bg-black/40"
+                ].join(" ")}
+                title={voted ? "You voted for this" : "Vote"}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0 truncate text-sm text-zinc-200">{o.label}</div>
+                  <div className="shrink-0 text-[11px] text-zinc-400">
+                    {pct}% • {votes}
+                  </div>
+                </div>
+
+                <div className="mt-2 h-2 w-full rounded-full bg-black/40">
+                  <div className="h-2 rounded-full bg-white" style={{ width: `${pct}%` }} />
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-2 text-[11px] text-zinc-500">{total} total vote{total === 1 ? "" : "s"}</div>
+      </div>
+    );
   }
 
   async function addCoin() {
@@ -455,7 +555,7 @@ export default function DevProfilePage() {
               </button>
             </div>
 
-            {/* ✅ Updates (now supports image upload) */}
+            {/* ✅ Updates (now supports image upload + optional poll) */}
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
               <h2 className="text-lg font-semibold">Post an update</h2>
 
@@ -466,6 +566,74 @@ export default function DevProfilePage() {
                 onChange={(e) => setPostContent(e.target.value)}
                 maxLength={500}
               />
+
+              {/* ✅ Poll builder (optional) */}
+              <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-4">
+                <div className="text-sm font-semibold">Add a poll (optional)</div>
+                <div className="mt-1 text-xs text-zinc-400">If you start a poll, you must add a question + 2 options.</div>
+
+                <input
+                  className="mt-3 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm"
+                  placeholder="Poll question…"
+                  value={postPollQuestion}
+                  onChange={(e) => setPostPollQuestion(e.target.value)}
+                  disabled={postBusy || postPollBusy}
+                />
+
+                <div className="mt-2 grid gap-2">
+                  {postPollOptions.map((v, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <input
+                        className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm"
+                        placeholder={`Option ${idx + 1}`}
+                        value={v}
+                        onChange={(e) => {
+                          const next = [...postPollOptions];
+                          next[idx] = e.target.value;
+                          setPostPollOptions(next);
+                        }}
+                        disabled={postBusy || postPollBusy}
+                      />
+                      {postPollOptions.length > 2 ? (
+                        <button
+                          type="button"
+                          onClick={() => setPostPollOptions((prev) => prev.filter((_, i) => i !== idx))}
+                          disabled={postBusy || postPollBusy}
+                          className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10 disabled:opacity-60"
+                        >
+                          Remove
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (postPollOptions.length >= 6) return;
+                      setPostPollOptions((prev) => [...prev, ""]);
+                    }}
+                    disabled={postBusy || postPollBusy || postPollOptions.length >= 6}
+                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10 disabled:opacity-60"
+                  >
+                    Add option
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPostPollQuestion("");
+                      setPostPollOptions(["", ""]);
+                    }}
+                    disabled={postBusy || postPollBusy}
+                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10 disabled:opacity-60"
+                  >
+                    Clear poll
+                  </button>
+                </div>
+              </div>
 
               {/* Image picker */}
               <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-4">
@@ -533,7 +701,7 @@ export default function DevProfilePage() {
                     posts.slice(0, 8).map((p) => (
                       <div key={p.id} className="rounded-xl border border-white/10 bg-black/30 p-3">
                         <div className="text-xs text-zinc-500">{new Date(p.created_at).toLocaleString()}</div>
-                        <div className="mt-1 text-sm text-zinc-200 whitespace-pre-wrap break-words">{p.content}</div>
+                        <div className="mt-1 whitespace-pre-wrap break-words text-sm text-zinc-200">{p.content}</div>
 
                         {p.image_url ? (
                           <div className="mt-2 overflow-hidden rounded-xl border border-white/10 bg-black/20">
@@ -541,14 +709,16 @@ export default function DevProfilePage() {
                             <img src={p.image_url} alt="" className="max-h-[420px] w-full object-cover" />
                           </div>
                         ) : null}
+
+                        {p.poll ? <PollCard poll={p.poll} /> : null}
                       </div>
                     ))
                   )}
                 </div>
 
                 <p className="mt-3 text-[11px] text-zinc-500">
-                  If images don’t show: make sure your <span className="font-mono">/api/dev/profile</span> GET is returning{" "}
-                  <span className="font-mono">image_url</span> for each post (signed).
+                  If polls don’t show: make sure your <span className="font-mono">/api/dev/profile</span> GET is returning{" "}
+                  <span className="font-mono">poll</span> for each post (with options + votes + viewer_vote).
                 </p>
               </div>
             </div>
@@ -648,7 +818,7 @@ export default function DevProfilePage() {
                           </div>
                         </div>
 
-                        <div className="shrink-0 flex flex-col items-end gap-2">
+                        <div className="flex shrink-0 flex-col items-end gap-2">
                           {community ? (
                             <>
                               <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
