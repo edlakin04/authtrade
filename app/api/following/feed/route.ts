@@ -14,21 +14,29 @@ async function getViewerWallet() {
   return session?.wallet ?? null;
 }
 
-async function signFromAnyBucket(
-  sb: ReturnType<typeof supabaseAdmin>,
-  path: string | null
-) {
+async function signFromAnyBucket(sb: ReturnType<typeof supabaseAdmin>, path: string | null) {
   if (!path) return null;
 
   const buckets = ["devposts", "dev-posts", "dev_posts", "posts"];
 
   for (const b of buckets) {
-    const { data, error } = await sb.storage.from(b).createSignedUrl(path, 60 * 30);
-    if (!error && data?.signedUrl) return data.signedUrl;
+    try {
+      const { data, error } = await sb.storage.from(b).createSignedUrl(path, 60 * 30);
+      if (!error && data?.signedUrl) return data.signedUrl;
+    } catch {
+      // ignore and try next
+    }
   }
 
   return null;
 }
+
+type Poll = {
+  id: string;
+  question: string;
+  options: Array<{ id: string; label: string; votes: number }>;
+  viewer_vote?: string | null;
+};
 
 export async function GET() {
   const viewerWallet = await getViewerWallet();
@@ -40,18 +48,13 @@ export async function GET() {
 
   /* ---------------- FOLLOWED DEVS ---------------- */
 
-  const followsRes = await sb
-    .from("follows")
-    .select("dev_wallet")
-    .eq("follower_wallet", viewerWallet);
+  const followsRes = await sb.from("follows").select("dev_wallet").eq("follower_wallet", viewerWallet);
 
   if (followsRes.error) {
     return NextResponse.json({ error: followsRes.error.message }, { status: 500 });
   }
 
-  const devWallets = (followsRes.data ?? [])
-    .map((x) => x.dev_wallet)
-    .filter(Boolean);
+  const devWallets = (followsRes.data ?? []).map((x) => x.dev_wallet).filter(Boolean);
 
   if (devWallets.length === 0) {
     return NextResponse.json({
@@ -77,55 +80,84 @@ export async function GET() {
 
   const rawPosts = postsRes.data ?? [];
 
-  /* ---------------- POLL DATA ---------------- */
+  /* ---------------- POLL DATA (hydrate via dev_posts.poll_id) ---------------- */
 
-  const pollIds = rawPosts.map((p: any) => p.poll_id).filter(Boolean);
-  const pollMap = new Map();
+  const pollIds = Array.from(
+    new Set(rawPosts.map((p: any) => (p.poll_id ? String(p.poll_id) : null)).filter(Boolean) as string[])
+  );
+
+  const pollMap = new Map<string, Poll>();
 
   if (pollIds.length) {
-    const { data: polls } = await sb
-      .from("dev_post_polls")
-      .select("id, question")
-      .in("id", pollIds);
+    // polls
+    const pollsRes = await sb.from("dev_post_polls").select("id, question").in("id", pollIds);
 
-    const { data: options } = await sb
+    if (!pollsRes.error) {
+      for (const p of pollsRes.data ?? []) {
+        pollMap.set(String((p as any).id), {
+          id: String((p as any).id),
+          question: String((p as any).question ?? ""),
+          options: [],
+          viewer_vote: null
+        });
+      }
+    }
+
+    // options (sorted)
+    const optionsRes = await sb
       .from("dev_post_poll_options")
       .select("id, poll_id, label, sort_order")
-      .in("poll_id", pollIds);
+      .in("poll_id", pollIds)
+      .order("sort_order", { ascending: true });
 
-    const { data: votes } = await sb
+    if (!optionsRes.error) {
+      for (const o of optionsRes.data ?? []) {
+        const pid = String((o as any).poll_id);
+        const poll = pollMap.get(pid);
+        if (!poll) continue;
+
+        poll.options.push({
+          id: String((o as any).id),
+          label: String((o as any).label ?? ""),
+          votes: 0
+        });
+      }
+    }
+
+    // votes (aggregate)
+    const votesRes = await sb
       .from("dev_post_poll_votes")
       .select("poll_id, option_id, voter_wallet")
-      .in("poll_id", pollIds);
+      .in("poll_id", pollIds)
+      .limit(20000);
 
-    for (const p of polls ?? []) {
-      pollMap.set(p.id, {
-        id: p.id,
-        question: p.question,
-        options: []
-      });
-    }
+    if (!votesRes.error) {
+      // build a quick lookup: poll_id -> (option_id -> count)
+      const countsByPoll = new Map<string, Map<string, number>>();
 
-    for (const o of options ?? []) {
-      const p = pollMap.get(o.poll_id);
-      if (!p) continue;
+      for (const v of votesRes.data ?? []) {
+        const pid = String((v as any).poll_id);
+        const oid = String((v as any).option_id);
 
-      p.options.push({
-        id: o.id,
-        label: o.label,
-        votes: 0
-      });
-    }
+        if (!countsByPoll.has(pid)) countsByPoll.set(pid, new Map());
+        const m = countsByPoll.get(pid)!;
+        m.set(oid, (m.get(oid) ?? 0) + 1);
 
-    for (const v of votes ?? []) {
-      const p = pollMap.get(v.poll_id);
-      if (!p) continue;
+        if (String((v as any).voter_wallet) === viewerWallet) {
+          const poll = pollMap.get(pid);
+          if (poll) poll.viewer_vote = oid;
+        }
+      }
 
-      const opt = p.options.find((x: any) => x.id === v.option_id);
-      if (opt) opt.votes++;
+      // apply counts to options
+      for (const [pid, poll] of pollMap.entries()) {
+        const counts = countsByPoll.get(pid);
+        if (!counts) continue;
 
-      if (v.voter_wallet === viewerWallet) {
-        p.viewer_vote = v.option_id;
+        poll.options = poll.options.map((opt) => ({
+          ...opt,
+          votes: counts.get(opt.id) ?? 0
+        }));
       }
     }
   }
@@ -139,7 +171,7 @@ export async function GET() {
       content: p.content,
       created_at: p.created_at,
       image_url: await signFromAnyBucket(sb, p.image_path ?? null),
-      poll: p.poll_id ? pollMap.get(p.poll_id) ?? null : null
+      poll: p.poll_id ? pollMap.get(String(p.poll_id)) ?? null : null
     }))
   );
 
