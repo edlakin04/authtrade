@@ -59,13 +59,6 @@ type DevBatchPayload = {
   }>;
 };
 
-// ✅ NEW: session payload so we can hide Profile tab for devs
-type SessionPayload = {
-  ok: true;
-  wallet: string | null;
-  role?: "user" | "dev" | "admin" | string | null;
-};
-
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
 function shortAddr(m: string) {
@@ -93,9 +86,9 @@ export default function AccountPage() {
 
   const [tab, setTab] = useState<TabKey>("wallet");
 
-  // ✅ NEW: session/role state
-  const [session, setSession] = useState<SessionPayload | null>(null);
-  const isDev = (session?.role === "dev" || session?.role === "admin") ?? false;
+  // ✅ NEW: detect dev role so we can hide Profile tab for devs
+  // null = unknown/loading, false = not dev, true = dev
+  const [isDev, setIsDev] = useState<boolean | null>(null);
 
   // Wallet/portfolio state
   const [loading, setLoading] = useState(false);
@@ -127,32 +120,35 @@ export default function AccountPage() {
 
   const owner = useMemo(() => publicKey?.toBase58() ?? "", [publicKey]);
 
-  // ✅ NEW: load session role once (used to hide Profile tab for devs)
+  // ✅ NEW: detect dev by calling /api/dev/profile
+  // - if 200 => dev (or admin)
+  // - if 401/403/404 => not dev (for this purpose)
   useEffect(() => {
     let cancelled = false;
+
     (async () => {
       try {
-        const res = await fetch("/api/session", { cache: "no-store" });
-        const json = (await res.json().catch(() => null)) as SessionPayload | null;
-        if (!cancelled) {
-          if (res.ok && json) setSession(json);
-          else setSession(null);
-        }
+        const res = await fetch("/api/dev/profile", { cache: "no-store" });
+        if (cancelled) return;
+
+        if (res.ok) setIsDev(true);
+        else setIsDev(false);
       } catch {
-        if (!cancelled) setSession(null);
+        if (!cancelled) setIsDev(false);
       }
     })();
+
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // ✅ If dev is viewing account, default away from "profile"
+  // ✅ NEW: if they are a dev and somehow on Profile tab, bounce them off it
   useEffect(() => {
-    if (!isDev) return;
-    if (tab === "profile") setTab("wallet");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isDev]);
+    if (isDev && tab === "profile") {
+      setTab("wallet");
+    }
+  }, [isDev, tab]);
 
   // --- Portfolio load (Wallet tab)
   useEffect(() => {
@@ -251,6 +247,7 @@ export default function AccountPage() {
 
         const json2 = (await res2.json().catch(() => null)) as DevBatchPayload | any;
         if (!res2.ok) {
+          // Don’t hard-fail the whole tab; just fall back to wallets
           if (!cancelled) setFollowMetaByWallet({});
         } else {
           const map: Record<string, { name: string | null; pfpUrl: string | null }> = {};
@@ -275,9 +272,11 @@ export default function AccountPage() {
     };
   }, [tab]);
 
-  // --- Profile load (Profile tab)  ✅ only if NOT dev
+  // --- Profile load (Profile tab)
   useEffect(() => {
     if (tab !== "profile") return;
+
+    // ✅ NEW: devs should never load the normal profile tab
     if (isDev) return;
 
     let cancelled = false;
@@ -421,15 +420,15 @@ export default function AccountPage() {
           {tab === "wallet" && loading && <span className="text-xs text-zinc-400">Loading…</span>}
           {tab === "communities" && commLoading && <span className="text-xs text-zinc-400">Loading…</span>}
           {tab === "following" && followLoading && <span className="text-xs text-zinc-400">Loading…</span>}
-          {tab === "profile" && profLoading && <span className="text-xs text-zinc-400">Loading…</span>}
+          {tab === "profile" && profLoading && !isDev && <span className="text-xs text-zinc-400">Loading…</span>}
         </div>
 
         <div className="mt-5 flex flex-wrap gap-2">
           <TabButton k="wallet" label="Wallet" />
           <TabButton k="communities" label="Communities" />
           <TabButton k="following" label="Following" />
-          {/* ✅ HIDE Profile tab for dev/admin */}
-          {!isDev ? <TabButton k="profile" label="Profile" /> : null}
+          {/* ✅ hide for devs */}
+          {!isDev && <TabButton k="profile" label="Profile" />}
         </div>
 
         {!connected && tab === "wallet" && (
@@ -641,8 +640,8 @@ export default function AccountPage() {
           </div>
         )}
 
-        {/* PROFILE TAB (only for non-devs) */}
-        {!isDev && tab === "profile" && (
+        {/* PROFILE TAB */}
+        {tab === "profile" && !isDev && (
           <div className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-5">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">Profile</h2>
