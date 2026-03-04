@@ -13,26 +13,22 @@ async function requireWallet() {
 }
 
 /**
- * FIX:
- * Dev detection must match how your app actually works.
- * A wallet is a dev if:
- *  - it has a row in dev_profiles (most reliable for your UI), OR
- *  - users.role is dev/admin (keeps role support)
+ * Dev detection:
+ * - dev_profiles row = dev (most reliable for your UI)
+ * - OR users.role dev/admin (keeps role support)
  */
 async function requireDev(wallet: string) {
   const sb = supabaseAdmin();
 
-  // 1) If they have a dev_profile, they are a dev (this fixes the Account tab issue).
   const prof = await sb.from("dev_profiles").select("wallet").eq("wallet", wallet).maybeSingle();
   if (!prof.error && prof.data?.wallet) return true;
 
-  // 2) Fallback to users.role if you still use roles
   const u = await sb.from("users").select("role").eq("wallet", wallet).maybeSingle();
   const role = (u.data?.role ?? null) as string | null;
   return role === "dev" || role === "admin";
 }
 
-// Try a couple bucket names so you don’t break if bucket differs between envs
+// Try multiple bucket names so env differences don’t break images
 const DEV_POST_BUCKETS = ["dev-posts", "dev_posts", "posts", "devposts"];
 
 async function signedDevPostImageUrl(sb: ReturnType<typeof supabaseAdmin>, path?: string | null) {
@@ -48,6 +44,84 @@ async function signedDevPostImageUrl(sb: ReturnType<typeof supabaseAdmin>, path?
   }
 
   return null;
+}
+
+type HydratedPoll = {
+  id: string;
+  question: string;
+  options: Array<{ id: string; label: string; votes: number }>;
+  viewer_vote?: string | null;
+};
+
+async function hydrateDevPostPolls(sb: ReturnType<typeof supabaseAdmin>, pollIds: string[], viewerWallet: string) {
+  const uniq = Array.from(new Set(pollIds.filter(Boolean)));
+  if (uniq.length === 0) return new Map<string, HydratedPoll>();
+
+  // Poll rows
+  const pollsRes = await sb.from("dev_post_polls").select("id, question").in("id", uniq);
+  if (pollsRes.error) throw new Error(pollsRes.error.message);
+
+  // Options
+  const optsRes = await sb
+    .from("dev_post_poll_options")
+    .select("id, poll_id, label, sort_order")
+    .in("poll_id", uniq)
+    .order("sort_order", { ascending: true });
+
+  if (optsRes.error) throw new Error(optsRes.error.message);
+
+  // Votes (we’ll count in JS)
+  const votesRes = await sb.from("dev_post_poll_votes").select("poll_id, option_id").in("poll_id", uniq);
+  if (votesRes.error) throw new Error(votesRes.error.message);
+
+  // Viewer vote (at most 1 per poll)
+  const viewerVotesRes = await sb
+    .from("dev_post_poll_votes")
+    .select("poll_id, option_id")
+    .in("poll_id", uniq)
+    .eq("voter_wallet", viewerWallet);
+
+  if (viewerVotesRes.error) throw new Error(viewerVotesRes.error.message);
+
+  const votes = votesRes.data ?? [];
+  const voteCountByOption = new Map<string, number>();
+  for (const v of votes as any[]) {
+    const optId = String(v.option_id);
+    voteCountByOption.set(optId, (voteCountByOption.get(optId) ?? 0) + 1);
+  }
+
+  const viewerVoteByPoll = new Map<string, string>();
+  for (const v of (viewerVotesRes.data ?? []) as any[]) {
+    viewerVoteByPoll.set(String(v.poll_id), String(v.option_id));
+  }
+
+  const optionsByPoll = new Map<string, Array<{ id: string; label: string; votes: number; sort_order: number }>>();
+  for (const o of (optsRes.data ?? []) as any[]) {
+    const pid = String(o.poll_id);
+    const arr = optionsByPoll.get(pid) ?? [];
+    arr.push({
+      id: String(o.id),
+      label: String(o.label ?? ""),
+      votes: voteCountByOption.get(String(o.id)) ?? 0,
+      sort_order: Number(o.sort_order) || 0
+    });
+    optionsByPoll.set(pid, arr);
+  }
+
+  // Build final map
+  const out = new Map<string, HydratedPoll>();
+  for (const p of (pollsRes.data ?? []) as any[]) {
+    const id = String(p.id);
+    const opts = (optionsByPoll.get(id) ?? []).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+    out.set(id, {
+      id,
+      question: String(p.question ?? ""),
+      options: opts.map((x) => ({ id: x.id, label: x.label, votes: x.votes })),
+      viewer_vote: viewerVoteByPoll.get(id) ?? null
+    });
+  }
+
+  return out;
 }
 
 export async function GET() {
@@ -67,7 +141,7 @@ export async function GET() {
     .eq("wallet", session.wallet)
     .order("created_at", { ascending: false });
 
-  // include image_path (and any other fields you already store)
+  // IMPORTANT: include poll_id + image_path so we can hydrate polls + sign images
   const postsRes = await sb
     .from("dev_posts")
     .select("*")
@@ -79,11 +153,27 @@ export async function GET() {
   if (postsRes.error) return NextResponse.json({ error: postsRes.error.message }, { status: 500 });
 
   const postsRaw = postsRes.data ?? [];
+
+  // ✅ hydrate polls in one go
+  const pollIds = postsRaw.map((p: any) => (p?.poll_id ? String(p.poll_id) : "")).filter(Boolean);
+  let pollById = new Map<string, HydratedPoll>();
+  try {
+    pollById = await hydrateDevPostPolls(sb, pollIds, session.wallet);
+  } catch (e: any) {
+    // If poll hydration fails, don’t break the whole page — just omit polls
+    pollById = new Map();
+  }
+
   const posts = await Promise.all(
-    postsRaw.map(async (p: any) => ({
-      ...p,
-      image_url: await signedDevPostImageUrl(sb, p.image_path ?? null)
-    }))
+    postsRaw.map(async (p: any) => {
+      const pollId = p?.poll_id ? String(p.poll_id) : null;
+
+      return {
+        ...p,
+        image_url: await signedDevPostImageUrl(sb, p.image_path ?? null),
+        poll: pollId ? pollById.get(pollId) ?? null : null
+      };
+    })
   );
 
   return NextResponse.json({
