@@ -16,68 +16,136 @@ async function getViewerWallet() {
 
 async function requireDev(wallet: string) {
   const sb = supabaseAdmin();
-
-  const { data } = await sb
-    .from("users")
-    .select("role")
-    .eq("wallet", wallet)
-    .maybeSingle();
-
+  const { data } = await sb.from("users").select("role").eq("wallet", wallet).maybeSingle();
   return data?.role === "dev" || data?.role === "admin";
+}
+
+function normalizeOptions(raw: any): string[] {
+  const arr = Array.isArray(raw) ? raw : [];
+  return arr
+    .map((o: any) => (typeof o === "string" ? o.trim() : ""))
+    .filter(Boolean)
+    .slice(0, 6);
+}
+
+function safeTrim(v: any): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  return t ? t : null;
+}
+
+async function uploadDevPostFile(sb: ReturnType<typeof supabaseAdmin>, wallet: string, file: File) {
+  // Put in dev-posts bucket (matches your other code)
+  const bucket = "dev-posts";
+
+  const ext = (() => {
+    const name = (file.name || "").toLowerCase();
+    const i = name.lastIndexOf(".");
+    return i >= 0 ? name.slice(i + 1) : "bin";
+  })();
+
+  const path = `posts/${wallet}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+
+  const arrayBuffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+
+  const { error } = await sb.storage.from(bucket).upload(path, bytes, {
+    contentType: file.type || "application/octet-stream",
+    upsert: false
+  });
+
+  if (error) throw new Error(error.message);
+  return path;
 }
 
 export async function POST(req: Request) {
   try {
     const viewerWallet = await getViewerWallet();
-    if (!viewerWallet) {
-      return NextResponse.json({ error: "Not signed in" }, { status: 401 });
-    }
+    if (!viewerWallet) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
     if (!(await requireDev(viewerWallet))) {
       return NextResponse.json({ error: "Not a dev" }, { status: 403 });
     }
 
-    const body = await req.json().catch(() => null);
-
-    const content =
-      typeof body?.content === "string" ? body.content.trim() : "";
-
-    const image_path =
-      typeof body?.image_path === "string" ? body.image_path.trim() : null;
-
-    const pollQuestion =
-      typeof body?.poll_question === "string"
-        ? body.poll_question.trim()
-        : null;
-
-    const pollOptionsRaw = Array.isArray(body?.poll_options)
-      ? body.poll_options
-      : [];
-
-    const pollOptions = pollOptionsRaw
-      .map((o: any) => (typeof o === "string" ? o.trim() : ""))
-      .filter(Boolean)
-      .slice(0, 6);
-
     const sb = supabaseAdmin();
+
+    let content: string | null = null;
+    let image_path: string | null = null;
+    let pollQuestion: string | null = null;
+    let pollOptions: string[] = [];
+
+    const ct = req.headers.get("content-type") || "";
+
+    // ✅ Support BOTH FormData (your UI) and JSON (older callers)
+    if (ct.includes("multipart/form-data")) {
+      const fd = await req.formData();
+
+      content = safeTrim(fd.get("content"));
+      pollQuestion = safeTrim(fd.get("poll_question"));
+
+      // poll_options can be:
+      // - repeated poll_options fields
+      // - a JSON string in poll_options
+      const optsAll = fd.getAll("poll_options");
+      if (optsAll?.length) {
+        pollOptions = optsAll
+          .map((x) => (typeof x === "string" ? x.trim() : ""))
+          .filter(Boolean)
+          .slice(0, 6);
+      } else {
+        const optsStr = fd.get("poll_options");
+        if (typeof optsStr === "string") {
+          try {
+            const parsed = JSON.parse(optsStr);
+            pollOptions = normalizeOptions(parsed);
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      const file = fd.get("file");
+      if (file && typeof file !== "string") {
+        image_path = await uploadDevPostFile(sb, viewerWallet, file as File);
+      } else {
+        image_path = safeTrim(fd.get("image_path"));
+      }
+    } else {
+      const body = await req.json().catch(() => null);
+
+      content = typeof body?.content === "string" ? body.content.trim() || null : null;
+      image_path = typeof body?.image_path === "string" ? body.image_path.trim() || null : null;
+
+      pollQuestion = typeof body?.poll_question === "string" ? body.poll_question.trim() || null : null;
+      pollOptions = normalizeOptions(body?.poll_options);
+    }
+
+    // ✅ allow poll-only post (no content required)
+    const hasPoll = !!(pollQuestion && pollOptions.length >= 2);
+    const hasAny = !!(content || image_path || hasPoll);
+
+    if (!hasAny) {
+      return NextResponse.json(
+        { error: "Nothing to post (add text, image, or a poll with 2+ options)." },
+        { status: 400 }
+      );
+    }
 
     let pollId: string | null = null;
 
     /* ---------------- CREATE POLL ---------------- */
-
-    if (pollQuestion && pollOptions.length >= 2) {
+    if (hasPoll) {
+      // IMPORTANT: your schema uses "wallet" (NOT dev_wallet)
       const { data: poll, error: pollErr } = await sb
         .from("dev_post_polls")
         .insert({
-          dev_wallet: viewerWallet,
+          wallet: viewerWallet,
           question: pollQuestion
         })
         .select("id")
         .single();
 
-      if (pollErr) {
-        return NextResponse.json({ error: pollErr.message }, { status: 500 });
-      }
+      if (pollErr) return NextResponse.json({ error: pollErr.message }, { status: 500 });
 
       pollId = poll.id;
 
@@ -87,36 +155,32 @@ export async function POST(req: Request) {
         sort_order: i
       }));
 
-      const { error: optErr } = await sb
-        .from("dev_post_poll_options")
-        .insert(optionRows);
-
-      if (optErr) {
-        return NextResponse.json({ error: optErr.message }, { status: 500 });
-      }
+      const { error: optErr } = await sb.from("dev_post_poll_options").insert(optionRows);
+      if (optErr) return NextResponse.json({ error: optErr.message }, { status: 500 });
     }
 
     /* ---------------- CREATE POST ---------------- */
+    // ✅ DB best practice: make dev_posts.content nullable.
+    // But if you haven’t migrated yet, we still avoid NULL by providing a fallback string.
+    const finalContent =
+      content ??
+      (pollId ? "📊 Poll" : null) ??
+      (image_path ? " " : null); // last resort if content is NOT NULL in DB
 
     const { data: post, error: postErr } = await sb
       .from("dev_posts")
       .insert({
         wallet: viewerWallet,
-        content: content || pollQuestion || null,
+        content: finalContent,
         image_path,
         poll_id: pollId
       })
       .select("*")
       .single();
 
-    if (postErr) {
-      return NextResponse.json({ error: postErr.message }, { status: 500 });
-    }
+    if (postErr) return NextResponse.json({ error: postErr.message }, { status: 500 });
 
-    return NextResponse.json({
-      ok: true,
-      post
-    });
+    return NextResponse.json({ ok: true, post });
   } catch (e: any) {
     return NextResponse.json(
       { error: "Failed to create post", details: e?.message ?? String(e) },
