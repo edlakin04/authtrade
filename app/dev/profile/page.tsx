@@ -295,7 +295,6 @@ export default function DevProfilePage() {
   // ✅ Create update with optional image and/or poll
   async function createPost() {
     const content = postContent.trim();
-    if (content.length < 2) return alert("Post too short");
 
     const q = postPollQuestion.trim();
     const opts = postPollOptions.map((x) => x.trim()).filter(Boolean);
@@ -306,10 +305,16 @@ export default function DevProfilePage() {
       if (opts.length < 2) return alert("Poll needs at least 2 options.");
     }
 
+    // ✅ NEW: allow poll-only post (no update text required)
+    const hasSomething = content.length >= 2 || !!postFile || includePoll;
+    if (!hasSomething) return alert("Add text, an image, or a poll.");
+
     setPostBusy(true);
     try {
       const fd = new FormData();
-      fd.append("content", content);
+
+      // ✅ only send content if it exists; poll-only is allowed
+      if (content.length >= 2) fd.append("content", content);
       if (postFile) fd.append("file", postFile);
 
       if (includePoll) {
@@ -472,11 +477,7 @@ export default function DevProfilePage() {
                   <div className="h-14 w-14 overflow-hidden rounded-full border border-white/10 bg-white/5">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     {localPreview || pfpSignedUrl ? (
-                      <img
-                        src={localPreview || pfpSignedUrl || ""}
-                        alt=""
-                        className="h-full w-full object-cover"
-                      />
+                      <img src={localPreview || pfpSignedUrl || ""} alt="" className="h-full w-full object-cover" />
                     ) : null}
                   </div>
 
@@ -684,9 +685,18 @@ export default function DevProfilePage() {
                 ) : null}
               </div>
 
+              {/* ✅ CHANGED: allow post when poll-only or image-only */}
               <button
                 onClick={createPost}
-                disabled={postBusy || postContent.trim().length < 2}
+                disabled={
+                  postBusy ||
+                  !(
+                    postContent.trim().length >= 2 ||
+                    !!postFile ||
+                    (postPollQuestion.trim().length >= 2 &&
+                      postPollOptions.map((x) => x.trim()).filter(Boolean).length >= 2)
+                  )
+                }
                 className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
               >
                 {postBusy ? "Posting…" : "Post update"}
