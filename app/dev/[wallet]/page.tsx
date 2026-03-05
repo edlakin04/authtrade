@@ -152,6 +152,7 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
   const [busy, setBusy] = useState(false);
 
   const [pfpUrl, setPfpUrl] = useState<string | null>(null);
+  const [bannerUrl, setBannerUrl] = useState<string | null>(null);
 
   const [reviews, setReviews] = useState<ReviewsPayload | null>(null);
   const [reviewsErr, setReviewsErr] = useState<string | null>(null);
@@ -192,6 +193,22 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
     }
   }
 
+  async function loadBanner(wallet: string) {
+    const w = (wallet || "").trim();
+    if (!w) return;
+    try {
+      const res = await fetch(`/api/public/banner?wallet=${encodeURIComponent(w)}`, { cache: "no-store" });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setBannerUrl(null);
+        return;
+      }
+      setBannerUrl((json?.url ?? null) as string | null);
+    } catch {
+      setBannerUrl(null);
+    }
+  }
+
   async function loadDev(wallet: string) {
     setErr(null);
     const res = await fetch(`/api/public/dev/${encodeURIComponent(wallet)}`, { cache: "no-store" });
@@ -205,6 +222,7 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
 
     setData(json as DevPayload);
     await loadPfp(wallet);
+    await loadBanner(wallet);
   }
 
   async function loadReviews(wallet: string) {
@@ -231,6 +249,7 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
     loadDev(devWallet);
     loadReviews(devWallet);
     loadPfp(devWallet);
+    loadBanner(devWallet);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [devWallet]);
 
@@ -430,6 +449,20 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
   return (
     <main className="min-h-screen bg-authswap text-white">
       <TopNav />
+
+      {/* ✅ Banner at very top (under nav) */}
+      <div className="mx-auto max-w-5xl px-6 pt-6">
+        <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/30">
+          {bannerUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={bannerUrl} alt="" className="h-40 w-full object-cover sm:h-48" />
+          ) : (
+            <div className="flex h-40 w-full items-center justify-center text-sm text-zinc-500 sm:h-48">
+              No banner
+            </div>
+          )}
+        </div>
+      </div>
 
       <div className="mx-auto max-w-5xl px-6 py-10">
         <div className="flex items-start justify-between gap-4">
