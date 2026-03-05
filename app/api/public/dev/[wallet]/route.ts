@@ -7,10 +7,28 @@ export const dynamic = "force-dynamic";
 
 const DEV_POST_BUCKETS = ["dev-posts", "dev_posts", "posts", "devposts"];
 
+// ✅ new banner bucket candidates (your chosen bucket name is "dev-banners")
+const DEV_BANNER_BUCKETS = ["dev-banners", "dev_banners", "devbanners", "banners"];
+
 async function signedDevPostImageUrl(sb: ReturnType<typeof supabaseAdmin>, path?: string | null) {
   if (!path) return null;
 
   for (const bucket of DEV_POST_BUCKETS) {
+    try {
+      const { data, error } = await sb.storage.from(bucket).createSignedUrl(path, 60 * 30);
+      if (!error && data?.signedUrl) return data.signedUrl;
+    } catch {
+      // try next bucket
+    }
+  }
+
+  return null;
+}
+
+async function signedDevBannerUrl(sb: ReturnType<typeof supabaseAdmin>, path?: string | null) {
+  if (!path) return null;
+
+  for (const bucket of DEV_BANNER_BUCKETS) {
     try {
       const { data, error } = await sb.storage.from(bucket).createSignedUrl(path, 60 * 30);
       if (!error && data?.signedUrl) return data.signedUrl;
@@ -56,14 +74,17 @@ export async function GET(_req: Request, { params }: { params: Promise<{ wallet:
     // ignore (public route)
   }
 
+  // ✅ include banner_path so we can sign banner url here (non-breaking)
   const profileRes = await sb
     .from("dev_profiles")
-    .select("wallet, display_name, bio, pfp_url, x_url, created_at, updated_at")
+    .select("wallet, display_name, bio, pfp_url, pfp_path, banner_path, x_url, created_at, updated_at")
     .eq("wallet", devWallet)
     .maybeSingle();
 
   if (profileRes.error) return NextResponse.json({ error: profileRes.error.message }, { status: 500 });
   if (!profileRes.data) return NextResponse.json({ error: "Dev profile not found" }, { status: 404 });
+
+  const banner_url = await signedDevBannerUrl(sb, (profileRes.data as any)?.banner_path ?? null);
 
   // ✅ Posts: include poll_id so we can hydrate the poll
   const postsRes = await sb
@@ -85,11 +106,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ wallet:
 
   if (pollIds.length) {
     // Poll questions
-    const pollsRes = await sb
-      .from("dev_post_polls")
-      .select("id, question, created_at")
-      .in("id", pollIds);
-
+    const pollsRes = await sb.from("dev_post_polls").select("id, question, created_at").in("id", pollIds);
     if (pollsRes.error) return NextResponse.json({ error: pollsRes.error.message }, { status: 500 });
 
     // Poll options
@@ -135,7 +152,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ wallet:
     for (const o of optionsRes.data ?? []) {
       const pid = String((o as any).poll_id);
       if (!optionsByPoll.has(pid)) optionsByPoll.set(pid, []);
-      optionsByPoll.get(pid)!.push({ id: String((o as any).id), label: String((o as any).label ?? "") });
+      optionsByPoll
+        .get(pid)!
+        .push({ id: String((o as any).id), label: String((o as any).label ?? "") });
     }
 
     // Assemble polls
@@ -213,7 +232,11 @@ export async function GET(_req: Request, { params }: { params: Promise<{ wallet:
     viewerWallet,
     isFollowing,
     followersCount,
-    profile: profileRes.data,
+    // ✅ non-breaking: keep profile object but add banner_url (and keep banner_path in case you want it client-side)
+    profile: {
+      ...(profileRes.data as any),
+      banner_url
+    },
     posts,
     coins: coinsRes.data ?? []
   });
