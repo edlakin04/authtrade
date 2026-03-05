@@ -10,7 +10,7 @@ type Ctx = {
   params: Promise<{ id: string }>;
 };
 
-export async function GET(req: Request, ctx: Ctx) {
+export async function GET(_req: Request, ctx: Ctx) {
   try {
     const { id } = await ctx.params;
 
@@ -30,10 +30,10 @@ export async function GET(req: Request, ctx: Ctx) {
 
     const sb = supabaseAdmin();
 
-    // coin row (coins table uses wallet as dev wallet)
+    // ✅ include banner_path
     const { data: coinRow, error: coinErr } = await sb
       .from("coins")
-      .select("id, wallet, token_address, title, description, created_at")
+      .select("id, wallet, token_address, title, description, banner_path, created_at")
       .eq("id", id)
       .maybeSingle();
 
@@ -68,6 +68,8 @@ export async function GET(req: Request, ctx: Ctx) {
         token_address: coinRow.token_address,
         title: coinRow.title,
         description: coinRow.description,
+        // ✅ expose banner_path for UI / future endpoints
+        banner_path: (coinRow as any).banner_path ?? null,
         created_at: coinRow.created_at,
         upvotes_count: upvotesCount ?? 0,
         comments_count: commentsCount ?? 0,
