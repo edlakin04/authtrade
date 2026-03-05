@@ -31,10 +31,28 @@ async function requireDev(wallet: string) {
 // Try multiple bucket names so env differences don’t break images
 const DEV_POST_BUCKETS = ["dev-posts", "dev_posts", "posts", "devposts"];
 
+// ✅ banner bucket candidates (your chosen bucket is "dev-banners")
+const DEV_BANNER_BUCKETS = ["dev-banners", "dev_banners", "devbanners", "banners"];
+
 async function signedDevPostImageUrl(sb: ReturnType<typeof supabaseAdmin>, path?: string | null) {
   if (!path) return null;
 
   for (const bucket of DEV_POST_BUCKETS) {
+    try {
+      const { data, error } = await sb.storage.from(bucket).createSignedUrl(path, 60 * 30);
+      if (!error && data?.signedUrl) return data.signedUrl;
+    } catch {
+      // try next bucket
+    }
+  }
+
+  return null;
+}
+
+async function signedDevBannerUrl(sb: ReturnType<typeof supabaseAdmin>, path?: string | null) {
+  if (!path) return null;
+
+  for (const bucket of DEV_BANNER_BUCKETS) {
     try {
       const { data, error } = await sb.storage.from(bucket).createSignedUrl(path, 60 * 30);
       if (!error && data?.signedUrl) return data.signedUrl;
@@ -134,7 +152,13 @@ export async function GET() {
 
   const sb = supabaseAdmin();
 
-  const profileRes = await sb.from("dev_profiles").select("*").eq("wallet", session.wallet).maybeSingle();
+  // ✅ include banner_path so UI can show banner in dev profile page
+  const profileRes = await sb
+    .from("dev_profiles")
+    .select("*")
+    .eq("wallet", session.wallet)
+    .maybeSingle();
+
   const coinsRes = await sb
     .from("coins")
     .select("*")
@@ -159,7 +183,7 @@ export async function GET() {
   let pollById = new Map<string, HydratedPoll>();
   try {
     pollById = await hydrateDevPostPolls(sb, pollIds, session.wallet);
-  } catch (e: any) {
+  } catch {
     // If poll hydration fails, don’t break the whole page — just omit polls
     pollById = new Map();
   }
@@ -176,9 +200,12 @@ export async function GET() {
     })
   );
 
+  // ✅ sign banner (non-breaking: adds banner_url)
+  const banner_url = await signedDevBannerUrl(sb, (profileRes.data as any)?.banner_path ?? null);
+
   return NextResponse.json({
     ok: true,
-    profile: profileRes.data ?? null,
+    profile: profileRes.data ? { ...(profileRes.data as any), banner_url } : null,
     coins: coinsRes.data ?? [],
     posts
   });
