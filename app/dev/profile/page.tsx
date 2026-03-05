@@ -74,6 +74,11 @@ const BANNER_ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
 // Recommended banner ~3:1
 const BANNER_RECOMMENDED = "1500×500 (3:1)";
 
+// ✅ Coin banner upload constraints (same as dev banner)
+const COIN_BANNER_MAX_BYTES = 15 * 1024 * 1024; // 15MB
+const COIN_BANNER_ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
+const COIN_BANNER_RECOMMENDED = "1500×500 (3:1)";
+
 export default function DevProfilePage() {
   const [loading, setLoading] = useState(true);
 
@@ -98,6 +103,10 @@ export default function DevProfilePage() {
   const [coinAddr, setCoinAddr] = useState("");
   const [coinTitle, setCoinTitle] = useState("");
   const [coinDesc, setCoinDesc] = useState("");
+
+  // ✅ NEW: coin banner file (optional, uploaded during coin creation)
+  const [coinBannerFile, setCoinBannerFile] = useState<File | null>(null);
+  const [coinBannerErr, setCoinBannerErr] = useState<string | null>(null);
 
   // Signed PFP url for previewing current avatar
   const [pfpSignedUrl, setPfpSignedUrl] = useState<string | null>(null);
@@ -456,20 +465,42 @@ export default function DevProfilePage() {
           })}
         </div>
 
-        <div className="mt-2 text-[11px] text-zinc-500">{total} total vote{total === 1 ? "" : "s"}</div>
+        <div className="mt-2 text-[11px] text-zinc-500">
+          {total} total vote{total === 1 ? "" : "s"}
+        </div>
       </div>
     );
   }
 
   async function addCoin() {
+    setCoinBannerErr(null);
+
+    // If banner selected, validate it
+    if (coinBannerFile) {
+      if (!COIN_BANNER_ALLOWED.has(coinBannerFile.type)) {
+        setCoinBannerErr("Invalid banner type. Allowed: JPG, PNG, WEBP.");
+        return;
+      }
+      if (coinBannerFile.size <= 0) {
+        setCoinBannerErr("Empty banner file.");
+        return;
+      }
+      if (coinBannerFile.size > COIN_BANNER_MAX_BYTES) {
+        setCoinBannerErr("Banner too large (max 15MB).");
+        return;
+      }
+    }
+
+    // ✅ switched to FormData so we can include the file
+    const fd = new FormData();
+    fd.append("token_address", coinAddr);
+    fd.append("title", coinTitle || "");
+    fd.append("description", coinDesc || "");
+    if (coinBannerFile) fd.append("file", coinBannerFile);
+
     const res = await fetch("/api/dev/coins", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        token_address: coinAddr,
-        title: coinTitle || null,
-        description: coinDesc || null
-      })
+      body: fd
     });
 
     const data = await res.json().catch(() => ({}));
@@ -478,6 +509,8 @@ export default function DevProfilePage() {
     setCoinAddr("");
     setCoinTitle("");
     setCoinDesc("");
+    setCoinBannerFile(null);
+    setCoinBannerErr(null);
     await refresh();
   }
 
@@ -525,6 +558,18 @@ export default function DevProfilePage() {
       if (bannerLocalPreview) URL.revokeObjectURL(bannerLocalPreview);
     };
   }, [bannerLocalPreview]);
+
+  // ✅ local preview for coin banner
+  const coinBannerLocalPreview = useMemo(() => {
+    if (!coinBannerFile) return null;
+    return URL.createObjectURL(coinBannerFile);
+  }, [coinBannerFile]);
+
+  useEffect(() => {
+    return () => {
+      if (coinBannerLocalPreview) URL.revokeObjectURL(coinBannerLocalPreview);
+    };
+  }, [coinBannerLocalPreview]);
 
   // Client-side "wide" sanity check (doesn't block if we can't read)
   useEffect(() => {
@@ -580,6 +625,58 @@ export default function DevProfilePage() {
     };
   }, [bannerFile]);
 
+  // ✅ coin banner aspect check (same idea)
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkCoinAspect() {
+      setCoinBannerErr(null);
+      if (!coinBannerFile) return;
+
+      if (!COIN_BANNER_ALLOWED.has(coinBannerFile.type)) {
+        setCoinBannerErr("Invalid banner type. Allowed: JPG, PNG, WEBP.");
+        return;
+      }
+
+      if (coinBannerFile.size > COIN_BANNER_MAX_BYTES) {
+        setCoinBannerErr("Banner too large (max 15MB).");
+        return;
+      }
+
+      try {
+        const url = URL.createObjectURL(coinBannerFile);
+        const img = new Image();
+        const dims = await new Promise<{ w: number; h: number }>((resolve, reject) => {
+          img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+          img.onerror = reject;
+          img.src = url;
+        });
+        URL.revokeObjectURL(url);
+
+        if (cancelled) return;
+
+        if (!(dims.w > dims.h)) {
+          setCoinBannerErr(`Banner should be wide (recommended ${COIN_BANNER_RECOMMENDED}).`);
+          return;
+        }
+
+        const ratio = dims.w / dims.h;
+        if (ratio < 1.6) {
+          setCoinBannerErr(`Banner looks too square (recommended ${COIN_BANNER_RECOMMENDED}).`);
+          return;
+        }
+      } catch {
+        // don't hard block
+      }
+    }
+
+    checkCoinAspect();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [coinBannerFile]);
+
   const postButtonEnabled =
     postContent.trim().length >= 2 ||
     !!postFile ||
@@ -597,11 +694,7 @@ export default function DevProfilePage() {
           <div className="relative">
             {bannerPreviewUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={bannerPreviewUrl}
-                alt=""
-                className="h-40 w-full object-cover sm:h-48"
-              />
+              <img src={bannerPreviewUrl} alt="" className="h-40 w-full object-cover sm:h-48" />
             ) : (
               <div className="flex h-40 w-full items-center justify-center text-sm text-zinc-500 sm:h-48">
                 No banner yet — recommended {BANNER_RECOMMENDED}
@@ -770,7 +863,9 @@ export default function DevProfilePage() {
               {/* ✅ Poll builder (optional) */}
               <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-4">
                 <div className="text-sm font-semibold">Add a poll (optional)</div>
-                <div className="mt-1 text-xs text-zinc-400">If you start a poll, you must add a question + 2 options.</div>
+                <div className="mt-1 text-xs text-zinc-400">
+                  If you start a poll, you must add a question + 2 options.
+                </div>
 
                 <input
                   className="mt-3 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm"
@@ -917,8 +1012,8 @@ export default function DevProfilePage() {
                 </div>
 
                 <p className="mt-3 text-[11px] text-zinc-500">
-                  If polls don’t show: make sure your <span className="font-mono">/api/dev/profile</span> GET is returning{" "}
-                  <span className="font-mono">poll</span> for each post (with options + votes + viewer_vote).
+                  If polls don’t show: make sure your <span className="font-mono">/api/dev/profile</span> GET is
+                  returning <span className="font-mono">poll</span> for each post (with options + votes + viewer_vote).
                 </p>
               </div>
             </div>
@@ -928,7 +1023,9 @@ export default function DevProfilePage() {
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <h2 className="text-lg font-semibold">Coins</h2>
-                  <p className="mt-1 text-xs text-zinc-500">Coins you post are permanent and cannot be removed individually.</p>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Coins you post are permanent and cannot be removed individually.
+                  </p>
                 </div>
 
                 <span className="shrink-0 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
@@ -955,6 +1052,62 @@ export default function DevProfilePage() {
                   value={coinDesc}
                   onChange={(e) => setCoinDesc(e.target.value)}
                 />
+              </div>
+
+              {/* ✅ NEW: coin banner picker + preview */}
+              <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold">Coin banner (optional)</div>
+                    <div className="mt-1 text-xs text-zinc-400">
+                      Wide image recommended {COIN_BANNER_RECOMMENDED} • JPG/PNG/WEBP • max 15MB
+                    </div>
+                    {coinBannerErr ? <div className="mt-2 text-xs text-red-200">{coinBannerErr}</div> : null}
+                  </div>
+
+                  {coinBannerFile ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCoinBannerFile(null);
+                        setCoinBannerErr(null);
+                      }}
+                      className="shrink-0 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10"
+                    >
+                      Remove
+                    </button>
+                  ) : null}
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <label className="cursor-pointer rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10">
+                    Choose banner
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0] || null;
+                        setCoinBannerFile(f);
+                      }}
+                    />
+                  </label>
+
+                  {coinBannerFile ? (
+                    <span className="text-xs text-zinc-400">
+                      {coinBannerFile.name} • {(coinBannerFile.size / (1024 * 1024)).toFixed(2)}MB
+                    </span>
+                  ) : (
+                    <span className="text-xs text-zinc-500">No banner selected.</span>
+                  )}
+                </div>
+
+                {coinBannerLocalPreview ? (
+                  <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-black/20">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={coinBannerLocalPreview} alt="" className="h-40 w-full object-cover" />
+                  </div>
+                ) : null}
               </div>
 
               <button
@@ -1014,7 +1167,9 @@ export default function DevProfilePage() {
 
                             <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
                             {c.description ? <div className="mt-1 text-xs text-zinc-300">{c.description}</div> : null}
-                            <div className="mt-2 text-[11px] text-zinc-500">{new Date(c.created_at).toLocaleString()}</div>
+                            <div className="mt-2 text-[11px] text-zinc-500">
+                              {new Date(c.created_at).toLocaleString()}
+                            </div>
                           </div>
                         </div>
 
