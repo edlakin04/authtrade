@@ -18,6 +18,7 @@ export async function POST(req: Request) {
   if (!session?.wallet) return NextResponse.json({ error: "Invalid session" }, { status: 401 });
 
   const sb = supabaseAdmin();
+
   const { data: user } = await sb.from("users").select("role").eq("wallet", session.wallet).maybeSingle();
 
   if (user?.role !== "dev" && user?.role !== "admin") {
@@ -25,6 +26,7 @@ export async function POST(req: Request) {
   }
 
   const body = await req.json().catch(() => null);
+
   const token_address = (body?.token_address as string | undefined)?.trim();
   const title = (body?.title as string | undefined)?.trim() ?? null;
   const description = (body?.description as string | undefined)?.trim() ?? null;
@@ -33,16 +35,24 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid token address" }, { status: 400 });
   }
 
-  const { error } = await sb.from("coins").insert({
-    wallet: session.wallet,
-    token_address,
-    title,
-    description
-  });
+  // ✅ insert coin and return created row
+  const { data, error } = await sb
+    .from("coins")
+    .insert({
+      wallet: session.wallet,
+      token_address,
+      title,
+      description
+    })
+    .select()
+    .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({
+    ok: true,
+    coin: data
+  });
 }
 
 /**
