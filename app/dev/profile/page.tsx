@@ -69,6 +69,11 @@ type CommunityGet = {
   viewerIsMember: boolean;
 };
 
+const BANNER_MAX_BYTES = 15 * 1024 * 1024; // 15MB
+const BANNER_ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
+// Recommended banner ~3:1
+const BANNER_RECOMMENDED = "1500×500 (3:1)";
+
 export default function DevProfilePage() {
   const [loading, setLoading] = useState(true);
 
@@ -101,6 +106,12 @@ export default function DevProfilePage() {
   const [pfpFile, setPfpFile] = useState<File | null>(null);
   const [pfpUploading, setPfpUploading] = useState(false);
 
+  // ✅ Banner (signed url + upload)
+  const [bannerSignedUrl, setBannerSignedUrl] = useState<string | null>(null);
+  const [bannerFile, setBannerFile] = useState<File | null>(null);
+  const [bannerUploading, setBannerUploading] = useState(false);
+  const [bannerErr, setBannerErr] = useState<string | null>(null);
+
   // Coin metadata (name/symbol/logo) keyed by mint
   const [metaByMint, setMetaByMint] = useState<Record<string, LiveMeta | null>>({});
   const [metaLoadingMints, setMetaLoadingMints] = useState<Record<string, boolean>>({});
@@ -131,15 +142,21 @@ export default function DevProfilePage() {
       setXUrl(data.profile.x_url ?? "");
     }
 
-    // Fetch signed url for current wallet’s pfp
+    // Fetch signed url for current wallet’s pfp + banner
     const w = data?.profile?.wallet;
     if (w) {
       const p = await fetch(`/api/public/pfp?wallet=${encodeURIComponent(w)}`, { cache: "no-store" })
         .then((r) => r.json())
         .catch(() => null);
       setPfpSignedUrl(p?.url ?? null);
+
+      const b = await fetch(`/api/public/banner?wallet=${encodeURIComponent(w)}`, { cache: "no-store" })
+        .then((r) => r.json())
+        .catch(() => null);
+      setBannerSignedUrl(b?.url ?? null);
     } else {
       setPfpSignedUrl(null);
+      setBannerSignedUrl(null);
     }
   }
 
@@ -289,6 +306,46 @@ export default function DevProfilePage() {
       await refresh();
     } finally {
       setPfpUploading(false);
+    }
+  }
+
+  // ✅ Banner upload (15MB, wide image)
+  async function uploadBanner() {
+    if (!bannerFile) return;
+
+    setBannerErr(null);
+
+    if (!BANNER_ALLOWED.has(bannerFile.type)) {
+      setBannerErr("Invalid file type. Allowed: JPG, PNG, WEBP.");
+      return;
+    }
+
+    if (bannerFile.size <= 0) {
+      setBannerErr("Empty file.");
+      return;
+    }
+
+    if (bannerFile.size > BANNER_MAX_BYTES) {
+      setBannerErr("File too large (max 15MB).");
+      return;
+    }
+
+    setBannerUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", bannerFile);
+
+      const res = await fetch("/api/dev/banner", { method: "POST", body: fd });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setBannerErr(json?.error ?? "Banner upload failed");
+        return;
+      }
+
+      setBannerFile(null);
+      await refresh();
+    } finally {
+      setBannerUploading(false);
     }
   }
 
@@ -458,17 +515,152 @@ export default function DevProfilePage() {
     };
   }, [postPreview]);
 
+  const bannerLocalPreview = useMemo(() => {
+    if (!bannerFile) return null;
+    return URL.createObjectURL(bannerFile);
+  }, [bannerFile]);
+
+  useEffect(() => {
+    return () => {
+      if (bannerLocalPreview) URL.revokeObjectURL(bannerLocalPreview);
+    };
+  }, [bannerLocalPreview]);
+
+  // Client-side "wide" sanity check (doesn't block if we can't read)
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkAspect() {
+      setBannerErr(null);
+      if (!bannerFile) return;
+
+      if (!BANNER_ALLOWED.has(bannerFile.type)) {
+        setBannerErr("Invalid file type. Allowed: JPG, PNG, WEBP.");
+        return;
+      }
+
+      if (bannerFile.size > BANNER_MAX_BYTES) {
+        setBannerErr("File too large (max 15MB).");
+        return;
+      }
+
+      try {
+        const url = URL.createObjectURL(bannerFile);
+        const img = new Image();
+        const dims = await new Promise<{ w: number; h: number }>((resolve, reject) => {
+          img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+          img.onerror = reject;
+          img.src = url;
+        });
+        URL.revokeObjectURL(url);
+
+        if (cancelled) return;
+
+        // Basic rule: must be wider than tall (banner-ish)
+        if (!(dims.w > dims.h)) {
+          setBannerErr(`Banner should be wide (recommended ${BANNER_RECOMMENDED}).`);
+          return;
+        }
+
+        // Optional: warn if very close to square
+        const ratio = dims.w / dims.h;
+        if (ratio < 1.6) {
+          setBannerErr(`Banner looks too square (recommended ${BANNER_RECOMMENDED}).`);
+          return;
+        }
+      } catch {
+        // If we can't load it, don't hard-block.
+      }
+    }
+
+    checkAspect();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [bannerFile]);
+
   const postButtonEnabled =
     postContent.trim().length >= 2 ||
     !!postFile ||
     (postPollQuestion.trim().length >= 2 && postPollOptions.map((x) => x.trim()).filter(Boolean).length >= 2);
+
+  const bannerPreviewUrl = bannerLocalPreview || bannerSignedUrl;
 
   return (
     <main className="min-h-screen bg-authswap text-white">
       <TopNav />
 
       <div className="mx-auto max-w-5xl px-6 py-10">
-        <h1 className="text-2xl font-semibold">Dev Profile</h1>
+        {/* ✅ Banner at top */}
+        <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/30">
+          <div className="relative">
+            {bannerPreviewUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={bannerPreviewUrl}
+                alt=""
+                className="h-40 w-full object-cover sm:h-48"
+              />
+            ) : (
+              <div className="flex h-40 w-full items-center justify-center text-sm text-zinc-500 sm:h-48">
+                No banner yet — recommended {BANNER_RECOMMENDED}
+              </div>
+            )}
+
+            <div className="absolute right-3 top-3 rounded-xl border border-white/10 bg-black/50 px-3 py-2 text-xs text-zinc-200">
+              Banner
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 p-4">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold">Dev banner</div>
+              <div className="mt-1 text-xs text-zinc-400">
+                Wide image recommended {BANNER_RECOMMENDED} • JPG/PNG/WEBP • max 15MB
+              </div>
+              {bannerErr ? <div className="mt-2 text-xs text-red-200">{bannerErr}</div> : null}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="cursor-pointer rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10">
+                Choose banner
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] || null;
+                    setBannerFile(f);
+                  }}
+                />
+              </label>
+
+              <button
+                onClick={uploadBanner}
+                disabled={!bannerFile || bannerUploading || !!bannerErr}
+                className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+              >
+                {bannerUploading ? "Uploading…" : "Upload"}
+              </button>
+
+              {bannerFile ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBannerFile(null);
+                    setBannerErr(null);
+                  }}
+                  className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10"
+                >
+                  Cancel
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        <h1 className="mt-6 text-2xl font-semibold">Dev Profile</h1>
         <p className="mt-1 text-sm text-zinc-400">Edit your public profile, post updates, and list coins.</p>
 
         {loading ? (
@@ -736,9 +928,7 @@ export default function DevProfilePage() {
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <h2 className="text-lg font-semibold">Coins</h2>
-                  <p className="mt-1 text-xs text-zinc-500">
-                    Coins you post are permanent and cannot be removed individually.
-                  </p>
+                  <p className="mt-1 text-xs text-zinc-500">Coins you post are permanent and cannot be removed individually.</p>
                 </div>
 
                 <span className="shrink-0 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
@@ -824,9 +1014,7 @@ export default function DevProfilePage() {
 
                             <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
                             {c.description ? <div className="mt-1 text-xs text-zinc-300">{c.description}</div> : null}
-                            <div className="mt-2 text-[11px] text-zinc-500">
-                              {new Date(c.created_at).toLocaleString()}
-                            </div>
+                            <div className="mt-2 text-[11px] text-zinc-500">{new Date(c.created_at).toLocaleString()}</div>
                           </div>
                         </div>
 
