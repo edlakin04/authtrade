@@ -5,6 +5,7 @@ import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 const MAX_BANNER_BYTES = 15 * 1024 * 1024; // 15MB
 const ALLOWED_BANNER_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -47,12 +48,7 @@ async function signCoinBannerUrl(sb: ReturnType<typeof supabaseAdmin>, path?: st
   return data?.signedUrl ?? null;
 }
 
-async function uploadCoinBanner(
-  sb: ReturnType<typeof supabaseAdmin>,
-  wallet: string,
-  coinId: string,
-  file: File
-) {
+async function uploadCoinBanner(sb: ReturnType<typeof supabaseAdmin>, wallet: string, coinId: string, file: File) {
   if (!ALLOWED_BANNER_TYPES.has(file.type)) {
     throw new Error("Invalid banner file type. Allowed: jpeg, png, webp.");
   }
@@ -69,16 +65,26 @@ async function uploadCoinBanner(
   // Stable path per coin (overwrite allowed)
   const path = `coins/${wallet}/${coinId}/banner.${ext}`;
 
-  const arrayBuffer = await file.arrayBuffer();
-  const bytes = new Uint8Array(arrayBuffer);
+  // ✅ IMPORTANT: use Buffer like your working pfp route
+  const buf = Buffer.from(await file.arrayBuffer());
 
-  const { error } = await sb.storage.from(COIN_BANNER_BUCKET).upload(path, bytes, {
+  const { error } = await sb.storage.from(COIN_BANNER_BUCKET).upload(path, buf, {
     contentType: file.type,
     upsert: true
   });
 
   if (error) throw new Error(error.message);
   return path;
+}
+
+function pickBannerFile(fd: FormData): File | null {
+  // ✅ accept multiple possible keys (so UI can evolve without breaking backend)
+  const keys = ["file", "banner", "banner_file"];
+  for (const k of keys) {
+    const v = fd.get(k);
+    if (v && v instanceof File) return v;
+  }
+  return null;
 }
 
 export async function POST(req: Request) {
@@ -95,7 +101,6 @@ export async function POST(req: Request) {
     }
 
     const sb = supabaseAdmin();
-
     const ct = req.headers.get("content-type") || "";
 
     let token_address: string | null = null;
@@ -103,7 +108,7 @@ export async function POST(req: Request) {
     let description: string | null = null;
     let bannerFile: File | null = null;
 
-    // ✅ Support BOTH FormData (new UI) and JSON (older callers)
+    // ✅ Support BOTH FormData (banner) and JSON (no banner)
     if (ct.includes("multipart/form-data")) {
       const fd = await req.formData();
 
@@ -111,8 +116,7 @@ export async function POST(req: Request) {
       title = safeTrim(fd.get("title"));
       description = safeTrim(fd.get("description"));
 
-      const f = fd.get("file");
-      if (f && f instanceof File) bannerFile = f;
+      bannerFile = pickBannerFile(fd);
     } else {
       const body = await req.json().catch(() => null);
 
@@ -147,17 +151,12 @@ export async function POST(req: Request) {
       try {
         banner_path = await uploadCoinBanner(sb, session.wallet, String(coin.id), bannerFile);
 
-        const { error: upErr } = await sb
-          .from("coins")
-          .update({ banner_path })
-          .eq("id", coin.id);
+        const { error: upErr } = await sb.from("coins").update({ banner_path }).eq("id", coin.id);
 
         if (upErr) {
           return NextResponse.json({ error: upErr.message }, { status: 500 });
         }
       } catch (e: any) {
-        // If upload fails, you may prefer to keep the coin and just return an error
-        // But it's clearer to tell the client the coin exists and banner failed.
         return NextResponse.json(
           {
             error: "Coin created but banner upload failed",
@@ -180,10 +179,7 @@ export async function POST(req: Request) {
       }
     });
   } catch (e: any) {
-    return NextResponse.json(
-      { error: "Failed to add coin", details: e?.message ?? String(e) },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Failed to add coin", details: e?.message ?? String(e) }, { status: 500 });
   }
 }
 
