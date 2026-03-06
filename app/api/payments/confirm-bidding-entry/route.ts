@@ -10,6 +10,11 @@ export const runtime = "nodejs";
 
 type RoleRow = { role: string | null };
 
+const BIDDING_AD_BANNER_MAX_BYTES = 15 * 1024 * 1024;
+const BIDDING_AD_BANNER_ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
+const BIDDING_AD_BANNER_BUCKET =
+  process.env.BIDDING_AD_BANNER_BUCKET || "bidding-ad-banners";
+
 function startOfUtcDay(d: Date) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
 }
@@ -75,6 +80,10 @@ function getEntryFeeLamports() {
   return Math.round(getEntryFeeSol() * 1_000_000_000);
 }
 
+function safeFileName(name: string) {
+  return name.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
 async function getViewerWallet() {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
@@ -90,9 +99,13 @@ async function requireDev(wallet: string) {
   const prof = await sb.from("dev_profiles").select("wallet").eq("wallet", wallet).maybeSingle();
   if (!prof.error && prof.data?.wallet) return true;
 
-  const { data: user } = await sb.from("users").select("role").eq("wallet", wallet).maybeSingle<RoleRow>();
-  const role = (user?.role ?? null) as string | null;
+  const { data: user } = await sb
+    .from("users")
+    .select("role")
+    .eq("wallet", wallet)
+    .maybeSingle<RoleRow>();
 
+  const role = (user?.role ?? null) as string | null;
   return role === "dev" || role === "admin";
 }
 
@@ -189,31 +202,66 @@ async function findExistingEntryBySignature(signature: string) {
   return data ?? null;
 }
 
+async function uploadBannerFile(wallet: string, targetDate: string, file: File) {
+  if (!BIDDING_AD_BANNER_ALLOWED.has(file.type)) {
+    throw new Error("Invalid banner type. Allowed: JPG, PNG, WEBP.");
+  }
+
+  if (file.size <= 0) {
+    throw new Error("Empty banner file.");
+  }
+
+  if (file.size > BIDDING_AD_BANNER_MAX_BYTES) {
+    throw new Error("Banner too large (max 15MB).");
+  }
+
+  const ext = safeFileName(file.name || "banner.webp");
+  const path = `${wallet}/${targetDate}/${Date.now()}-${ext}`;
+
+  const arrayBuffer = await file.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
+  const sb = supabaseAdmin();
+  const { error } = await sb.storage
+    .from(BIDDING_AD_BANNER_BUCKET)
+    .upload(path, buffer, {
+      contentType: file.type,
+      upsert: false
+    });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return path;
+}
+
 export async function POST(req: Request) {
   try {
     const contentType = req.headers.get("content-type") || "";
 
-let signature = "";
-let targetDate = currentTargetDate();
-let coinId = "";
-let file: File | null = null;
+    let signature = "";
+    let targetDate = currentTargetDate();
+    let coinId = "";
+    let bannerPath = "";
+    let file: File | null = null;
 
-if (contentType.includes("multipart/form-data")) {
-  const form = await req.formData();
-  signature = String(form.get("signature") || "").trim();
-  targetDate = String(form.get("target_date") || currentTargetDate()).trim();
-  coinId = String(form.get("coin_id") || "").trim();
+    if (contentType.includes("multipart/form-data")) {
+      const form = await req.formData();
+      signature = String(form.get("signature") || "").trim();
+      targetDate = String(form.get("target_date") || currentTargetDate()).trim();
+      coinId = String(form.get("coin_id") || "").trim();
+      bannerPath = String(form.get("banner_path") || "").trim();
 
-  const maybeFile = form.get("file");
-  file = maybeFile instanceof File ? maybeFile : null;
-} else {
-  const body = await req.json().catch(() => null);
-  signature = String(body?.signature || "").trim();
-  targetDate = String(body?.target_date || currentTargetDate()).trim();
-  coinId = String(body?.coin_id || "").trim();
-}
-    const coinId = (body?.coin_id as string | undefined)?.trim();
-    const bannerPath = (body?.banner_path as string | undefined)?.trim();
+      const maybeFile = form.get("file");
+      file = maybeFile instanceof File ? maybeFile : null;
+    } else {
+      const body = await req.json().catch(() => null);
+      signature = String(body?.signature || "").trim();
+      targetDate = String(body?.target_date || currentTargetDate()).trim();
+      coinId = String(body?.coin_id || "").trim();
+      bannerPath = String(body?.banner_path || "").trim();
+    }
 
     if (!signature) {
       return NextResponse.json({ error: "Missing signature" }, { status: 400 });
@@ -227,10 +275,6 @@ if (contentType.includes("multipart/form-data")) {
       return NextResponse.json({ error: "Missing coin_id" }, { status: 400 });
     }
 
-    if (!bannerPath) {
-      return NextResponse.json({ error: "Missing banner_path" }, { status: 400 });
-    }
-
     const wallet = await getViewerWallet();
     if (!wallet) {
       return NextResponse.json({ error: "Not signed in" }, { status: 401 });
@@ -238,6 +282,13 @@ if (contentType.includes("multipart/form-data")) {
 
     if (!(await requireDev(wallet))) {
       return NextResponse.json({ error: "Not a dev" }, { status: 403 });
+    }
+
+    if (!bannerPath) {
+      if (!file) {
+        return NextResponse.json({ error: "Missing banner file" }, { status: 400 });
+      }
+      bannerPath = await uploadBannerFile(wallet, targetDate, file);
     }
 
     const auction = await getOrCreateAuction(targetDate);
