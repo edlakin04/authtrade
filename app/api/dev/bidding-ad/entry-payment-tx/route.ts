@@ -210,7 +210,16 @@ export async function POST(req: Request) {
     const lamports = getEntryFeeLamports();
 
     const connection = new Connection(rpcUrl, "confirmed");
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+   let blockhash: string;
+   let lastValidBlockHeight: number;
+
+   try {
+     const latest = await connection.getLatestBlockhash("confirmed");
+     blockhash = latest.blockhash;
+     lastValidBlockHeight = latest.lastValidBlockHeight;
+   } catch (e: any) {
+     throw new Error(`RPC getLatestBlockhash failed: ${e?.message ?? String(e)}`);
+   }
 
     const fromPubkey = new PublicKey(wallet);
     const toPubkey = new PublicKey(treasuryWallet);
@@ -245,7 +254,7 @@ export async function POST(req: Request) {
         amount_lamports: lamports
       },
       tx: {
-        serialized_base64: serialized.toString("base64"),
+        serialized_base64: Buffer.from(serialized).toString("base64"),
         blockhash,
         lastValidBlockHeight
       }
