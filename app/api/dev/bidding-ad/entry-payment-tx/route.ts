@@ -1,10 +1,6 @@
+// app/api/dev/bidding-ad/entry-payment-tx/route.ts
 import { NextResponse } from "next/server";
-import {
-  Connection,
-  PublicKey,
-  SystemProgram,
-  Transaction
-} from "@solana/web3.js";
+import { Connection, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import { cookies } from "next/headers";
 import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
@@ -31,7 +27,7 @@ function currentTargetDate(now = new Date()) {
   return toDateOnlyUtc(addUtcDays(todayUtc, 1));
 }
 
-function scheduleForTargetDate(targetDate: string) {
+function biddingAdScheduleForTargetDate(targetDate: string) {
   const day = new Date(`${targetDate}T00:00:00.000Z`);
   const prevDay = addUtcDays(day, -1);
 
@@ -39,10 +35,10 @@ function scheduleForTargetDate(targetDate: string) {
     Date.UTC(prevDay.getUTCFullYear(), prevDay.getUTCMonth(), prevDay.getUTCDate(), 23, 0, 0, 0)
   );
   const auctionStartsAt = new Date(
-    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 21, 0, 0, 0)
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 11, 0, 0, 0)
   );
   const auctionEndsAt = new Date(
-    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 22, 0, 0, 0)
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 12, 0, 0, 0)
   );
 
   return {
@@ -66,8 +62,8 @@ function getTreasuryWallet() {
 }
 
 function getEntryFeeSol() {
-  const solRaw = process.env.BIDDING_AD_ENTRY_FEE_SOL ?? "1";
-  const sol = Number(solRaw);
+  const raw = process.env.BIDDING_AD_ENTRY_FEE_SOL ?? "1";
+  const sol = Number(raw);
 
   if (!Number.isFinite(sol) || sol <= 0) {
     throw new Error("Invalid BIDDING_AD_ENTRY_FEE_SOL env value");
@@ -78,10 +74,6 @@ function getEntryFeeSol() {
 
 function getEntryFeeLamports() {
   return Math.round(getEntryFeeSol() * 1_000_000_000);
-}
-
-function safeTrim(v: unknown) {
-  return typeof v === "string" ? v.trim() : "";
 }
 
 async function getViewerWallet() {
@@ -119,7 +111,7 @@ async function getOrCreateAuction(targetDate: string) {
   if (existingRes.error) throw new Error(existingRes.error.message);
   if (existingRes.data) return existingRes.data;
 
-  const schedule = scheduleForTargetDate(targetDate);
+  const schedule = biddingAdScheduleForTargetDate(targetDate);
 
   const insertRes = await sb
     .from("bidding_ad_auctions")
@@ -135,51 +127,22 @@ async function getOrCreateAuction(targetDate: string) {
     )
     .single();
 
-  if (insertRes.error) {
-    const retryRes = await sb
-      .from("bidding_ad_auctions")
-      .select(
-        "id, target_date, entry_opens_at, auction_starts_at, auction_ends_at, status, highest_bid_lamports, highest_bidder_wallet, highest_bid_entry_id, last_bid_at, bid_count, created_at, updated_at"
-      )
-      .eq("target_date", targetDate)
-      .maybeSingle();
+  if (!insertRes.error && insertRes.data) return insertRes.data;
 
-    if (retryRes.error) throw new Error(retryRes.error.message);
-    if (!retryRes.data) throw new Error(insertRes.error.message);
-    return retryRes.data;
-  }
-
-  return insertRes.data;
-}
-
-async function getOwnedCoin(wallet: string, coinId: string) {
-  const sb = supabaseAdmin();
-
-  const { data, error } = await sb
-    .from("coins")
-    .select("id, wallet, token_address, title")
-    .eq("id", coinId)
-    .eq("wallet", wallet)
-    .maybeSingle();
-
-  if (error) throw new Error(error.message);
-  return data ?? null;
-}
-
-async function getExistingEntry(wallet: string, targetDate: string) {
-  const sb = supabaseAdmin();
-
-  const { data, error } = await sb
-    .from("bidding_ad_entries")
+  const retryRes = await sb
+    .from("bidding_ad_auctions")
     .select(
-      "id, auction_id, target_date, dev_wallet, coin_id, banner_path, coin_title, token_address, entry_fee_lamports, entry_payment_status, entry_payment_signature, entry_payment_confirmed_at, created_at, updated_at"
+      "id, target_date, entry_opens_at, auction_starts_at, auction_ends_at, status, highest_bid_lamports, highest_bidder_wallet, highest_bid_entry_id, last_bid_at, bid_count, created_at, updated_at"
     )
-    .eq("dev_wallet", wallet)
     .eq("target_date", targetDate)
     .maybeSingle();
 
-  if (error) throw new Error(error.message);
-  return data ?? null;
+  if (retryRes.error) throw new Error(retryRes.error.message);
+  if (!retryRes.data) {
+    throw new Error(insertRes.error?.message || "Failed to create bidding ad auction");
+  }
+
+  return retryRes.data;
 }
 
 export async function POST(req: Request) {
@@ -189,26 +152,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Not signed in" }, { status: 401 });
     }
 
-    if (!(await requireDev(wallet))) {
+    const isDev = await requireDev(wallet);
+    if (!isDev) {
       return NextResponse.json({ error: "Not a dev" }, { status: 403 });
     }
 
-    const form = await req.formData().catch(() => null);
-    if (!form) {
-      return NextResponse.json({ error: "Invalid form data" }, { status: 400 });
-    }
+    const body = await req.json().catch(() => null);
+    const targetDate = ((body?.target_date as string | undefined)?.trim() || currentTargetDate());
 
-    const targetDate = safeTrim(form.get("target_date")) || currentTargetDate();
-    const coinId = safeTrim(form.get("coin_id"));
-    const fileEntry = form.get("file");
-    const bannerFile = fileEntry instanceof File ? fileEntry : null;
-
-    if (!coinId) {
-      return NextResponse.json({ error: "coin_id is required" }, { status: 400 });
-    }
-
-    if (!bannerFile) {
-      return NextResponse.json({ error: "A banner file is required" }, { status: 400 });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
+      return NextResponse.json({ error: "Invalid target_date" }, { status: 400 });
     }
 
     const auction = await getOrCreateAuction(targetDate);
@@ -223,16 +176,6 @@ export async function POST(req: Request) {
 
     if (now >= auctionStartsAt) {
       return NextResponse.json({ error: "Bidding Ad entry is closed for that day" }, { status: 400 });
-    }
-
-    const coin = await getOwnedCoin(wallet, coinId);
-    if (!coin) {
-      return NextResponse.json({ error: "Selected coin not found" }, { status: 400 });
-    }
-
-    const existingEntry = await getExistingEntry(wallet, targetDate);
-    if (existingEntry?.entry_payment_status === "paid") {
-      return NextResponse.json({ error: "Entry fee already paid for this target date" }, { status: 400 });
     }
 
     const rpcUrl = process.env.SOLANA_RPC_URL;
@@ -268,30 +211,22 @@ export async function POST(req: Request) {
     return NextResponse.json({
       ok: true,
       targetDate,
-      preview: {
-        coin_id: String(coin.id),
-        coin_title: coin.title ?? null,
-        token_address: coin.token_address ?? null,
-        banner_name: bannerFile.name,
-        banner_type: bannerFile.type || null,
-        banner_size: bannerFile.size
-      },
       payment: {
         treasuryWallet,
-        amount_sol: getEntryFeeSol(),
-        amount_lamports: lamports
+        entryFeeSol: getEntryFeeSol(),
+        entryFeeLamports: lamports
       },
-      tx: {
-        serialized_base64: Buffer.from(serialized).toString("base64"),
-        blockhash,
-        lastValidBlockHeight
-      }
+      txBase64: serialized.toString("base64"),
+      blockhash,
+      lastValidBlockHeight
     });
   } catch (e: any) {
+    console.error("bidding-ad entry-payment-tx error:", e);
+
     return NextResponse.json(
       {
-        error: "Failed to create bidding ad entry payment transaction",
-        details: e?.message ?? String(e)
+        error: "Failed to create entry payment transaction",
+        details: e?.message ?? "Internal error"
       },
       { status: 500 }
     );
