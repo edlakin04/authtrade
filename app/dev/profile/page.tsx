@@ -138,6 +138,11 @@ const COIN_BANNER_MAX_BYTES = 15 * 1024 * 1024; // 15MB
 const COIN_BANNER_ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
 const COIN_BANNER_RECOMMENDED = "1500×500 (3:1)";
 
+// ✅ Golden Hour banner constraints
+const GOLDEN_HOUR_BANNER_MAX_BYTES = 15 * 1024 * 1024; // 15MB
+const GOLDEN_HOUR_BANNER_ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
+const GOLDEN_HOUR_BANNER_RECOMMENDED = "1500×500 (3:1)";
+
 export default function DevProfilePage() {
   const [loading, setLoading] = useState(true);
 
@@ -185,6 +190,13 @@ export default function DevProfilePage() {
   const [goldenHourLoading, setGoldenHourLoading] = useState(false);
   const [goldenHourErr, setGoldenHourErr] = useState<string | null>(null);
   const [goldenHourEntryOpen, setGoldenHourEntryOpen] = useState(false);
+
+  // ✅ Golden Hour entry form
+  const [goldenHourCoinId, setGoldenHourCoinId] = useState<string>("");
+  const [goldenHourBannerFile, setGoldenHourBannerFile] = useState<File | null>(null);
+  const [goldenHourBannerErr, setGoldenHourBannerErr] = useState<string | null>(null);
+  const [goldenHourSubmitBusy, setGoldenHourSubmitBusy] = useState(false);
+  const [goldenHourDeleteBusy, setGoldenHourDeleteBusy] = useState(false);
 
   // Coin metadata (name/symbol/logo) keyed by mint
   const [metaByMint, setMetaByMint] = useState<Record<string, LiveMeta | null>>({});
@@ -601,6 +613,85 @@ export default function DevProfilePage() {
     await refreshGoldenHour();
   }
 
+  async function submitGoldenHourEntry() {
+    setGoldenHourBannerErr(null);
+
+    if (!goldenHourCoinId) {
+      setGoldenHourBannerErr("Choose one of your coins.");
+      return;
+    }
+
+    if (!goldenHourBannerFile) {
+      setGoldenHourBannerErr("Choose a banner.");
+      return;
+    }
+
+    if (!GOLDEN_HOUR_BANNER_ALLOWED.has(goldenHourBannerFile.type)) {
+      setGoldenHourBannerErr("Invalid banner type. Allowed: JPG, PNG, WEBP.");
+      return;
+    }
+
+    if (goldenHourBannerFile.size <= 0) {
+      setGoldenHourBannerErr("Empty banner file.");
+      return;
+    }
+
+    if (goldenHourBannerFile.size > GOLDEN_HOUR_BANNER_MAX_BYTES) {
+      setGoldenHourBannerErr("Banner too large (max 15MB).");
+      return;
+    }
+
+    setGoldenHourSubmitBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("coin_id", goldenHourCoinId);
+      fd.append("file", goldenHourBannerFile);
+
+      const res = await fetch("/api/dev/golden-hour", {
+        method: "POST",
+        body: fd
+      });
+
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setGoldenHourBannerErr(json?.error ?? "Failed to save Golden Hour entry");
+        return;
+      }
+
+      setGoldenHourEntryOpen(false);
+      setGoldenHourBannerFile(null);
+      setGoldenHourBannerErr(null);
+      await refreshGoldenHour();
+    } finally {
+      setGoldenHourSubmitBusy(false);
+    }
+  }
+
+  async function removeGoldenHourEntry() {
+    const ok = confirm("Remove your Golden Hour entry?");
+    if (!ok) return;
+
+    setGoldenHourDeleteBusy(true);
+    try {
+      const res = await fetch("/api/dev/golden-hour", {
+        method: "DELETE"
+      });
+
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(json?.error ?? "Failed to remove Golden Hour entry");
+        return;
+      }
+
+      setGoldenHourCoinId("");
+      setGoldenHourBannerFile(null);
+      setGoldenHourBannerErr(null);
+      await refreshGoldenHour();
+    } finally {
+      setGoldenHourDeleteBusy(false);
+    }
+  }
+
   async function deleteProfile() {
     const ok = confirm("Delete your dev profile and remove all your posts + coins?");
     if (!ok) return;
@@ -657,6 +748,18 @@ export default function DevProfilePage() {
       if (coinBannerLocalPreview) URL.revokeObjectURL(coinBannerLocalPreview);
     };
   }, [coinBannerLocalPreview]);
+
+  // ✅ local preview for Golden Hour banner
+  const goldenHourBannerLocalPreview = useMemo(() => {
+    if (!goldenHourBannerFile) return null;
+    return URL.createObjectURL(goldenHourBannerFile);
+  }, [goldenHourBannerFile]);
+
+  useEffect(() => {
+    return () => {
+      if (goldenHourBannerLocalPreview) URL.revokeObjectURL(goldenHourBannerLocalPreview);
+    };
+  }, [goldenHourBannerLocalPreview]);
 
   // Client-side "wide" sanity check (doesn't block if we can't read)
   useEffect(() => {
@@ -764,6 +867,73 @@ export default function DevProfilePage() {
     };
   }, [coinBannerFile]);
 
+  // ✅ Golden Hour banner aspect check
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkGoldenHourAspect() {
+      setGoldenHourBannerErr(null);
+      if (!goldenHourBannerFile) return;
+
+      if (!GOLDEN_HOUR_BANNER_ALLOWED.has(goldenHourBannerFile.type)) {
+        setGoldenHourBannerErr("Invalid banner type. Allowed: JPG, PNG, WEBP.");
+        return;
+      }
+
+      if (goldenHourBannerFile.size > GOLDEN_HOUR_BANNER_MAX_BYTES) {
+        setGoldenHourBannerErr("Banner too large (max 15MB).");
+        return;
+      }
+
+      try {
+        const url = URL.createObjectURL(goldenHourBannerFile);
+        const img = new Image();
+        const dims = await new Promise<{ w: number; h: number }>((resolve, reject) => {
+          img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+          img.onerror = reject;
+          img.src = url;
+        });
+        URL.revokeObjectURL(url);
+
+        if (cancelled) return;
+
+        if (!(dims.w > dims.h)) {
+          setGoldenHourBannerErr(`Banner should be wide (recommended ${GOLDEN_HOUR_BANNER_RECOMMENDED}).`);
+          return;
+        }
+
+        const ratio = dims.w / dims.h;
+        if (ratio < 1.6) {
+          setGoldenHourBannerErr(`Banner looks too square (recommended ${GOLDEN_HOUR_BANNER_RECOMMENDED}).`);
+          return;
+        }
+      } catch {
+        // don't hard block
+      }
+    }
+
+    checkGoldenHourAspect();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [goldenHourBannerFile]);
+
+  useEffect(() => {
+    if (!goldenHourEntryOpen) return;
+
+    if (goldenHour?.entry?.coin_id) {
+      setGoldenHourCoinId(goldenHour.entry.coin_id);
+    } else if (goldenHour?.ownedCoins?.length === 1) {
+      setGoldenHourCoinId(goldenHour.ownedCoins[0].id);
+    } else if (!goldenHourCoinId) {
+      setGoldenHourCoinId("");
+    }
+
+    setGoldenHourBannerErr(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [goldenHourEntryOpen, goldenHour?.entry?.coin_id, goldenHour?.ownedCoins?.length]);
+
   const postButtonEnabled =
     postContent.trim().length >= 2 ||
     !!postFile ||
@@ -778,6 +948,8 @@ export default function DevProfilePage() {
     goldenHour?.ownedCoins?.find((c) => c.id === goldenHour?.entry?.coin_id)?.title ||
     goldenHour?.entry?.token_address ||
     null;
+
+  const selectedGoldenHourCoin = goldenHour?.ownedCoins?.find((c) => c.id === goldenHourCoinId) ?? null;
 
   function formatGoldenHourDate(iso?: string | null) {
     if (!iso) return "—";
@@ -892,14 +1064,27 @@ export default function DevProfilePage() {
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setGoldenHourEntryOpen(true)}
-              disabled={goldenHourLoading || goldenHourState !== "can_enter"}
-              className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
-            >
-              {goldenHourLoading ? "Loading…" : goldenHourState === "can_enter" ? "Enter Golden Hour" : "Golden Hour"}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setGoldenHourEntryOpen(true)}
+                disabled={goldenHourLoading || goldenHourState !== "can_enter"}
+                className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+              >
+                {goldenHourLoading ? "Loading…" : goldenHourState === "can_enter" ? "Enter Golden Hour" : "Golden Hour"}
+              </button>
+
+              {goldenHour?.ui?.hasEntered && goldenHourState === "opted_in" ? (
+                <button
+                  type="button"
+                  onClick={removeGoldenHourEntry}
+                  disabled={goldenHourDeleteBusy}
+                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-60"
+                >
+                  {goldenHourDeleteBusy ? "Removing…" : "Remove entry"}
+                </button>
+              ) : null}
+            </div>
           </div>
 
           {goldenHourErr ? (
@@ -987,13 +1172,16 @@ export default function DevProfilePage() {
                 <div>
                   <h3 className="text-lg font-semibold">Golden Hour entry</h3>
                   <p className="mt-1 text-sm text-zinc-400">
-                    The entry card is the next step. This section is now wired and ready for the popup form.
+                    Pick one of your coins and upload the banner you want shown if you’re selected.
                   </p>
                 </div>
 
                 <button
                   type="button"
-                  onClick={() => setGoldenHourEntryOpen(false)}
+                  onClick={() => {
+                    setGoldenHourEntryOpen(false);
+                    setGoldenHourBannerErr(null);
+                  }}
                   className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10"
                 >
                   Close
@@ -1002,9 +1190,117 @@ export default function DevProfilePage() {
 
               <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-4">
                 <div className="text-sm text-zinc-200">{goldenHourStatusText()}</div>
-                <div className="mt-3 text-xs text-zinc-500">
-                  Next we’ll add coin selection, banner upload/selection, and submit/update entry inside this popup.
+              </div>
+
+              <div className="mt-4 space-y-4">
+                <div>
+                  <label className="text-sm font-semibold text-zinc-100">Select coin</label>
+                  <select
+                    value={goldenHourCoinId}
+                    onChange={(e) => setGoldenHourCoinId(e.target.value)}
+                    disabled={goldenHourSubmitBusy}
+                    className="mt-2 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
+                  >
+                    <option value="">Choose one of your coins</option>
+                    {(goldenHour?.ownedCoins ?? []).map((coin) => (
+                      <option key={coin.id} value={coin.id}>
+                        {coin.title?.trim() || coin.token_address}
+                      </option>
+                    ))}
+                  </select>
+
+                  {selectedGoldenHourCoin ? (
+                    <div className="mt-2 rounded-xl border border-white/10 bg-black/20 p-3">
+                      <div className="text-sm text-zinc-200">
+                        {selectedGoldenHourCoin.title?.trim() || "Untitled coin"}
+                      </div>
+                      <div className="mt-1 break-all font-mono text-xs text-zinc-500">
+                        {selectedGoldenHourCoin.token_address}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold">Golden Hour banner</div>
+                      <div className="mt-1 text-xs text-zinc-400">
+                        Wide image recommended {GOLDEN_HOUR_BANNER_RECOMMENDED} • JPG/PNG/WEBP • max 15MB
+                      </div>
+                      {goldenHourBannerErr ? <div className="mt-2 text-xs text-red-200">{goldenHourBannerErr}</div> : null}
+                    </div>
+
+                    {goldenHourBannerFile ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setGoldenHourBannerFile(null);
+                          setGoldenHourBannerErr(null);
+                        }}
+                        className="shrink-0 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10"
+                      >
+                        Remove
+                      </button>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <label className="cursor-pointer rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10">
+                      Choose banner
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0] || null;
+                          setGoldenHourBannerFile(f);
+                        }}
+                      />
+                    </label>
+
+                    {goldenHourBannerFile ? (
+                      <span className="text-xs text-zinc-400">
+                        {goldenHourBannerFile.name} • {(goldenHourBannerFile.size / (1024 * 1024)).toFixed(2)}MB
+                      </span>
+                    ) : (
+                      <span className="text-xs text-zinc-500">No banner selected.</span>
+                    )}
+                  </div>
+
+                  {goldenHourBannerLocalPreview ? (
+                    <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-black/20">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={goldenHourBannerLocalPreview} alt="" className="h-40 w-full object-cover" />
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-wrap justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={removeGoldenHourEntry}
+                  disabled={!goldenHour?.ui?.hasEntered || goldenHourDeleteBusy || goldenHourSubmitBusy}
+                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-60"
+                >
+                  {goldenHourDeleteBusy ? "Removing…" : "Remove entry"}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={submitGoldenHourEntry}
+                  disabled={
+                    goldenHourSubmitBusy ||
+                    goldenHourState !== "can_enter" ||
+                    !goldenHourCoinId ||
+                    !goldenHourBannerFile ||
+                    !!goldenHourBannerErr
+                  }
+                  className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+                >
+                  {goldenHourSubmitBusy ? "Saving…" : goldenHour?.ui?.hasEntered ? "Update entry" : "Save entry"}
+                </button>
               </div>
             </div>
           </div>
