@@ -895,31 +895,11 @@ export default function DevProfilePage() {
       const tx = Transaction.from(txBytes);
 
       const signature = await sendTransaction(tx, connection, {
-        skipPreflight: false,
-        preflightCommitment: "confirmed"
-      });
+  skipPreflight: false,
+  preflightCommitment: "confirmed"
+});
 
-      try {
-        if (
-          buildJson?.tx?.blockhash &&
-          typeof buildJson?.tx?.lastValidBlockHeight === "number"
-        ) {
-          await connection.confirmTransaction(
-            {
-              signature,
-              blockhash: buildJson.tx.blockhash,
-              lastValidBlockHeight: buildJson.tx.lastValidBlockHeight
-            },
-            "confirmed"
-          );
-        } else {
-          await connection.confirmTransaction(signature, "confirmed");
-        }
-      } catch (confirmErr) {
-        console.warn("Bidding ad payment confirm timed out, continuing to server verification:", confirmErr);
-      }
-
-      const confirmFd = new FormData();
+const confirmFd = new FormData();
 confirmFd.append("signature", signature);
 confirmFd.append("coin_id", biddingAdCoinId);
 confirmFd.append("file", biddingAdBannerFile);
@@ -936,20 +916,6 @@ const confirmJson = await confirmRes.json().catch(() => ({}));
 if (!confirmRes.ok) {
   throw new Error(confirmJson?.error || confirmJson?.details || "Entry payment confirmation failed");
 }
-
-const confirmRes = await fetch("/api/payments/confirm-bidding-entry", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    signature,
-    target_date: biddingAd?.targetDate
-  })
-});
-
-      const confirmJson = await confirmRes.json().catch(() => ({}));
-      if (!confirmRes.ok) {
-        throw new Error(confirmJson?.error || confirmJson?.details || "Entry payment confirmation failed");
-      }
 
       await refreshBiddingAd();
       setBiddingAdEntryOpen(false);
