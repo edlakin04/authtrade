@@ -39,7 +39,7 @@ function extFromType(type: string) {
 
 function currentTargetDate(now = new Date()) {
   const todayUtc = startOfUtcDay(now);
-  return toDateOnlyUtc(addUtcDays(todayUtc, 1));
+  return toDateOnlyUtc(todayUtc);
 }
 
 function getTreasuryWallet() {
