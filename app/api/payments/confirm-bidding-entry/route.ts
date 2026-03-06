@@ -191,10 +191,27 @@ async function findExistingEntryBySignature(signature: string) {
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => null);
+    const contentType = req.headers.get("content-type") || "";
 
-    const signature = (body?.signature as string | undefined)?.trim();
-    const targetDate = ((body?.target_date as string | undefined)?.trim() || currentTargetDate());
+let signature = "";
+let targetDate = currentTargetDate();
+let coinId = "";
+let file: File | null = null;
+
+if (contentType.includes("multipart/form-data")) {
+  const form = await req.formData();
+  signature = String(form.get("signature") || "").trim();
+  targetDate = String(form.get("target_date") || currentTargetDate()).trim();
+  coinId = String(form.get("coin_id") || "").trim();
+
+  const maybeFile = form.get("file");
+  file = maybeFile instanceof File ? maybeFile : null;
+} else {
+  const body = await req.json().catch(() => null);
+  signature = String(body?.signature || "").trim();
+  targetDate = String(body?.target_date || currentTargetDate()).trim();
+  coinId = String(body?.coin_id || "").trim();
+}
     const coinId = (body?.coin_id as string | undefined)?.trim();
     const bannerPath = (body?.banner_path as string | undefined)?.trim();
 
