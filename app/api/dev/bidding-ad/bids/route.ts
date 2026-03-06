@@ -86,7 +86,7 @@ async function getOrCreateAuction(targetDate: string) {
   if (existingRes.error) throw new Error(existingRes.error.message);
   if (existingRes.data) return existingRes.data;
 
-  const schedule = scheduleForTargetDate(targetDate);
+  const schedule = biddingAdScheduleForTargetDate(targetDate);
 
   const insertRes = await sb
     .from("bidding_ad_auctions")
