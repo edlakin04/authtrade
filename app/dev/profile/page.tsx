@@ -16,15 +16,15 @@ type Poll = {
   id: string;
   question: string;
   options: PollOption[];
-  viewer_vote?: string | null; // option_id or null
+  viewer_vote?: string | null;
 };
 
 type Profile = {
   wallet: string;
   display_name: string;
   bio: string | null;
-  pfp_url: string | null; // legacy (unused)
-  pfp_path?: string | null; // new
+  pfp_url: string | null;
+  pfp_path?: string | null;
   x_url: string | null;
 };
 
@@ -40,10 +40,8 @@ type Post = {
   id: string;
   content: string;
   created_at: string;
-
   image_url?: string | null;
   image_path?: string | null;
-
   poll?: Poll | null;
 };
 
@@ -139,6 +137,7 @@ type BiddingAdStatus = {
   pricing: {
     entryFeeSol: number;
     entryFeeLamports: number;
+    treasuryWallet: string;
   };
   eligibility: {
     isEligible: boolean;
@@ -179,6 +178,8 @@ type BiddingAdStatus = {
     token_address: string | null;
     entry_fee_lamports: number;
     entry_payment_status: "pending" | "paid" | "failed" | "refunded";
+    entry_payment_signature?: string | null;
+    entry_payment_confirmed_at?: string | null;
     created_at: string;
     updated_at: string;
   } | null;
@@ -205,6 +206,13 @@ type BiddingAdStatus = {
     description: string | null;
     created_at: string;
   }>;
+  payment?: {
+    treasuryWallet: string;
+    entryFeeSol: number;
+    entryFeeLamports: number;
+    entryConfirmed: boolean;
+    kind?: string;
+  };
 };
 
 const BANNER_MAX_BYTES = 15 * 1024 * 1024;
@@ -814,10 +822,6 @@ export default function DevProfilePage() {
       throw new Error("Wallet does not support sending transactions.");
     }
 
-    if (!treasuryWallet) {
-      throw new Error("Treasury wallet is not configured.");
-    }
-
     const lamports = Number(currentStatus.pricing?.entryFeeLamports ?? 0);
     if (!Number.isFinite(lamports) || lamports <= 0) {
       throw new Error("Invalid entry fee amount.");
@@ -825,7 +829,16 @@ export default function DevProfilePage() {
 
     setBiddingAdPayBusy(true);
     try {
-      const treasuryPubkey = new PublicKey(treasuryWallet);
+      const treasury =
+        currentStatus.payment?.treasuryWallet ||
+        currentStatus.pricing?.treasuryWallet ||
+        treasuryWallet;
+
+      if (!treasury) {
+        throw new Error("Treasury wallet is not configured.");
+      }
+
+      const treasuryPubkey = new PublicKey(treasury);
 
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
 
@@ -859,7 +872,7 @@ export default function DevProfilePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           signature,
-          target_date: currentStatus.targetDate
+          entry_id: currentStatus.entry.id
         })
       });
 
@@ -1304,7 +1317,8 @@ export default function DevProfilePage() {
   const selectedBiddingAdCoin = biddingAd?.ownedCoins?.find((c) => c.id === biddingAdCoinId) ?? null;
 
   const biddingAdCanEdit = biddingAdState === "can_enter" || biddingAdState === "entered";
-  const biddingAdPaymentPending = biddingAd?.entry?.entry_payment_status === "pending";
+  const biddingAdPaymentPending =
+    !!biddingAd?.entry && biddingAd.entry.entry_payment_status === "pending";
 
   const biddingAdCanSave =
     biddingAdCanEdit &&
@@ -1372,7 +1386,6 @@ export default function DevProfilePage() {
         <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/30">
           <div className="relative">
             {bannerPreviewUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
               <img src={bannerPreviewUrl} alt="" className="h-40 w-full object-cover sm:h-48" />
             ) : (
               <div className="flex h-40 w-full items-center justify-center text-sm text-zinc-500 sm:h-48">
@@ -1795,7 +1808,6 @@ export default function DevProfilePage() {
 
                   {goldenHourBannerLocalPreview ? (
                     <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-black/20">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={goldenHourBannerLocalPreview} alt="" className="h-40 w-full object-cover" />
                     </div>
                   ) : null}
@@ -1938,7 +1950,6 @@ export default function DevProfilePage() {
 
                   {biddingAdBannerLocalPreview ? (
                     <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-black/20">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={biddingAdBannerLocalPreview} alt="" className="h-40 w-full object-cover" />
                     </div>
                   ) : null}
@@ -1978,8 +1989,8 @@ export default function DevProfilePage() {
                       : biddingAdPaymentPending
                       ? `Save & pay ${biddingAd?.pricing?.entryFeeSol ?? 1} SOL`
                       : biddingAd?.ui?.hasEntered
-                      ? "Update entry"
-                      : `Save & pay ${biddingAd?.pricing?.entryFeeSol ?? 1} SOL`}
+                        ? "Update entry"
+                        : `Save & pay ${biddingAd?.pricing?.entryFeeSol ?? 1} SOL`}
                   </button>
                 </div>
               </div>
@@ -1997,7 +2008,6 @@ export default function DevProfilePage() {
               <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4">
                 <div className="flex items-center gap-4">
                   <div className="h-14 w-14 overflow-hidden rounded-full border border-white/10 bg-white/5">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     {localPreview || pfpSignedUrl ? (
                       <img src={localPreview || pfpSignedUrl || ""} alt="" className="h-full w-full object-cover" />
                     ) : null}
@@ -2200,7 +2210,6 @@ export default function DevProfilePage() {
 
                 {postPreview ? (
                   <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-black/20">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={postPreview} alt="" className="max-h-[360px] w-full object-cover" />
                   </div>
                 ) : null}
@@ -2227,7 +2236,6 @@ export default function DevProfilePage() {
 
                         {p.image_url ? (
                           <div className="mt-2 overflow-hidden rounded-xl border border-white/10 bg-black/20">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img src={p.image_url} alt="" className="max-h-[420px] w-full object-cover" />
                           </div>
                         ) : null}
@@ -2329,7 +2337,6 @@ export default function DevProfilePage() {
 
                 {coinBannerLocalPreview ? (
                   <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-black/20">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={coinBannerLocalPreview} alt="" className="h-40 w-full object-cover" />
                   </div>
                 ) : null}
@@ -2366,7 +2373,6 @@ export default function DevProfilePage() {
                       >
                         <div className="flex min-w-0 gap-3">
                           <div className="h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-white/5">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
                             {logo ? (
                               <img src={logo} alt="" className="h-full w-full object-cover" />
                             ) : (
