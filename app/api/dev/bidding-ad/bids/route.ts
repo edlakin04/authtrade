@@ -39,10 +39,10 @@ function biddingAdScheduleForTargetDate(targetDate: string) {
     Date.UTC(prevDay.getUTCFullYear(), prevDay.getUTCMonth(), prevDay.getUTCDate(), 23, 0, 0, 0)
   );
   const auctionStartsAt = new Date(
-    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 11, 0, 0, 0)
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 19, 0, 0, 0)
   );
   const auctionEndsAt = new Date(
-    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 12, 0, 0, 0)
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 20, 0, 0, 0)
   );
 
   return {
