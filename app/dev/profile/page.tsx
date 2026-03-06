@@ -899,7 +899,25 @@ export default function DevProfilePage() {
         preflightCommitment: "confirmed"
       });
 
-      await connection.confirmTransaction(signature, "confirmed");
+      try {
+        if (
+          buildJson?.tx?.blockhash &&
+          typeof buildJson?.tx?.lastValidBlockHeight === "number"
+        ) {
+          await connection.confirmTransaction(
+            {
+              signature,
+              blockhash: buildJson.tx.blockhash,
+              lastValidBlockHeight: buildJson.tx.lastValidBlockHeight
+            },
+            "confirmed"
+          );
+        } else {
+          await connection.confirmTransaction(signature, "confirmed");
+        }
+      } catch (confirmErr) {
+        console.warn("Bidding ad payment confirm timed out, continuing to server verification:", confirmErr);
+      }
 
       const fd = new FormData();
       fd.append("signature", signature);
