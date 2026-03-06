@@ -2,7 +2,10 @@
   "crons": [
     {
       "path": "/api/internal/golden-hour/pick",
-      "schedule": "0 11 * * *"
+      "schedule": "0 11 * * *",
+      "headers": {
+        "x-cron-secret": "super-long-random-secret-string"
+      }
     }
   ]
 }
