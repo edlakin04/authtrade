@@ -31,12 +31,19 @@ function currentTargetDate(now = new Date()) {
 }
 
 // MUST match app/api/dev/bidding-ad/route.ts exactly
-function scheduleForTargetDate(targetDate: string) {
+function biddingAdScheduleForTargetDate(targetDate: string) {
   const day = new Date(`${targetDate}T00:00:00.000Z`);
+  const prevDay = addUtcDays(day, -1);
 
-  const entryOpensAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 10, 0, 0, 0));
-  const auctionStartsAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 11, 0, 0, 0));
-  const auctionEndsAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 12, 0, 0, 0));
+  const entryOpensAt = new Date(
+    Date.UTC(prevDay.getUTCFullYear(), prevDay.getUTCMonth(), prevDay.getUTCDate(), 23, 0, 0, 0)
+  );
+  const auctionStartsAt = new Date(
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 11, 0, 0, 0)
+  );
+  const auctionEndsAt = new Date(
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 12, 0, 0, 0)
+  );
 
   return {
     entryOpensAt,
