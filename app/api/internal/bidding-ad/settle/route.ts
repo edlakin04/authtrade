@@ -5,7 +5,6 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const ONE_SOL_LAMPORTS = 1_000_000_000;
 const PAYMENT_WINDOW_MS = 60 * 1000;
 
 function startOfUtcDay(d: Date) {
@@ -38,6 +37,19 @@ function adWindowForTargetDate(targetDate: string) {
   };
 }
 
+function getInternalSecretOk(req: Request) {
+  const expected = process.env.INTERNAL_CRON_SECRET || process.env.CRON_SECRET || "";
+  if (!expected) return true;
+
+  const got = req.headers.get("x-internal-secret") || req.headers.get("authorization") || "";
+  if (!got) return false;
+
+  if (got === expected) return true;
+  if (got === `Bearer ${expected}`) return true;
+
+  return false;
+}
+
 async function getAuction(targetDate: string) {
   const sb = supabaseAdmin();
 
@@ -59,7 +71,7 @@ async function getWinner(auctionId: string) {
   const { data, error } = await sb
     .from("bidding_ad_winners")
     .select(
-      "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, created_at"
+      "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, payment_signature, created_at"
     )
     .eq("auction_id", auctionId)
     .maybeSingle();
@@ -110,7 +122,6 @@ async function getOrderedValidBids(auctionId: string) {
       `
       id,
       auction_id,
-      target_date,
       entry_id,
       bidder_wallet,
       amount_lamports,
@@ -127,6 +138,8 @@ async function getOrderedValidBids(auctionId: string) {
         token_address,
         entry_fee_lamports,
         entry_payment_status,
+        entry_payment_signature,
+        entry_payment_confirmed_at,
         created_at,
         updated_at
       )
@@ -189,7 +202,7 @@ async function getEntryById(entryId: string) {
   const { data, error } = await sb
     .from("bidding_ad_entries")
     .select(
-      "id, auction_id, target_date, dev_wallet, coin_id, banner_path, coin_title, token_address, entry_fee_lamports, entry_payment_status, created_at, updated_at"
+      "id, auction_id, target_date, dev_wallet, coin_id, banner_path, coin_title, token_address, entry_fee_lamports, entry_payment_status, entry_payment_signature, entry_payment_confirmed_at, created_at, updated_at"
     )
     .eq("id", entryId)
     .maybeSingle();
@@ -256,7 +269,7 @@ async function createWinnerFromQueueRow(queueRow: any) {
       payment_confirmed_at: queueRow.paid_at ?? new Date().toISOString()
     })
     .select(
-      "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, created_at"
+      "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, payment_signature, created_at"
     )
     .single();
 
@@ -272,8 +285,25 @@ function summarizeQueue(queue: any[]) {
   return { current, paid, queued, skipped };
 }
 
+async function activateNextQueuedBidder(auctionId: string, now: Date) {
+  const queue = await getExistingPaymentQueue(auctionId);
+  const nextQueued = queue.find((q) => q.status === "queued") ?? null;
+
+  if (!nextQueued) return null;
+
+  return await setQueueRowStatus(String(nextQueued.id), {
+    status: "awaiting_payment",
+    payment_due_at: new Date(now.getTime() + PAYMENT_WINDOW_MS).toISOString(),
+    skipped_at: null
+  });
+}
+
 export async function POST(req: Request) {
   try {
+    if (!getInternalSecretOk(req)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const url = new URL(req.url);
     const targetDate = (url.searchParams.get("target_date") || currentTargetDate()).trim();
 
@@ -347,69 +377,67 @@ export async function POST(req: Request) {
     let current = queue.find((q) => q.status === "awaiting_payment") ?? null;
 
     if (!current) {
-      const firstQueued = queue.find((q) => q.status === "queued") ?? null;
-
-      if (!firstQueued) {
-        updatedAuction = await markAuctionStatus(String(updatedAuction.id), "rolled_over");
-        return NextResponse.json({
-          ok: true,
-          targetDate,
-          auction: updatedAuction,
-          winner: null,
-          queue,
-          settled: true,
-          message: "No queued bidders remaining. Auction rolled over."
-        });
-      }
-
-      current = await setQueueRowStatus(String(firstQueued.id), {
-        status: "awaiting_payment",
-        payment_due_at: new Date(now.getTime() + PAYMENT_WINDOW_MS).toISOString()
-      });
+      current = await activateNextQueuedBidder(String(updatedAuction.id), now);
       queue = await getExistingPaymentQueue(String(updatedAuction.id));
     }
 
-    let guard = 0;
-    while (current && guard < 200) {
-      guard += 1;
-
-      const dueAtMs = current.payment_due_at ? Date.parse(String(current.payment_due_at)) : NaN;
-      if (!Number.isFinite(dueAtMs)) {
-        current = await setQueueRowStatus(String(current.id), {
-          status: "awaiting_payment",
-          payment_due_at: new Date(now.getTime() + PAYMENT_WINDOW_MS).toISOString()
-        });
-        queue = await getExistingPaymentQueue(String(updatedAuction.id));
-        break;
-      }
-
-      if (now.getTime() < dueAtMs) {
-        queue = await getExistingPaymentQueue(String(updatedAuction.id));
-        break;
-      }
-
-      await setQueueRowStatus(String(current.id), {
-        status: "skipped",
-        skipped_at: now.toISOString()
+    if (!current) {
+      updatedAuction = await markAuctionStatus(String(updatedAuction.id), "rolled_over");
+      return NextResponse.json({
+        ok: true,
+        targetDate,
+        auction: updatedAuction,
+        winner: null,
+        queue,
+        settled: true,
+        message: "No queued bidders remaining. Auction rolled over."
       });
+    }
 
-      const refreshedQueue = await getExistingPaymentQueue(String(updatedAuction.id));
-      const nextQueued = refreshedQueue.find((q) => q.status === "queued") ?? null;
+    const dueAtMs = current.payment_due_at ? Date.parse(String(current.payment_due_at)) : NaN;
 
-      if (!nextQueued) {
-        queue = refreshedQueue;
-        current = null;
-        break;
-      }
-
-      current = await setQueueRowStatus(String(nextQueued.id), {
+    if (!Number.isFinite(dueAtMs)) {
+      current = await setQueueRowStatus(String(current.id), {
         status: "awaiting_payment",
         payment_due_at: new Date(now.getTime() + PAYMENT_WINDOW_MS).toISOString()
       });
 
       queue = await getExistingPaymentQueue(String(updatedAuction.id));
-      break;
+
+      return NextResponse.json({
+        ok: true,
+        targetDate,
+        auction: updatedAuction,
+        winner: null,
+        queue,
+        currentPaymentRequest: current,
+        settled: false,
+        message: "Payment window refreshed for current bidder"
+      });
     }
+
+    if (now.getTime() <= dueAtMs) {
+      queue = await getExistingPaymentQueue(String(updatedAuction.id));
+
+      return NextResponse.json({
+        ok: true,
+        targetDate,
+        auction: updatedAuction,
+        winner: null,
+        queue,
+        currentPaymentRequest: current,
+        settled: false,
+        message: "Awaiting payment from current top bidder"
+      });
+    }
+
+    await setQueueRowStatus(String(current.id), {
+      status: "skipped",
+      skipped_at: now.toISOString()
+    });
+
+    const nextActive = await activateNextQueuedBidder(String(updatedAuction.id), now);
+    queue = await getExistingPaymentQueue(String(updatedAuction.id));
 
     const paidAfter = await getPaidQueueRow(String(updatedAuction.id));
     if (paidAfter) {
@@ -428,10 +456,7 @@ export async function POST(req: Request) {
       });
     }
 
-    queue = await getExistingPaymentQueue(String(updatedAuction.id));
-    const summary = summarizeQueue(queue);
-
-    if (!summary.current && !summary.queued.length) {
+    if (!nextActive) {
       updatedAuction = await markAuctionStatus(String(updatedAuction.id), "rolled_over");
       return NextResponse.json({
         ok: true,
@@ -452,11 +477,9 @@ export async function POST(req: Request) {
       auction: updatedAuction,
       winner: null,
       queue,
-      currentPaymentRequest: summary.current,
+      currentPaymentRequest: nextActive,
       settled: false,
-      message: summary.current
-        ? "Awaiting payment from current top bidder"
-        : "Settlement processed"
+      message: "Payment window rolled down to next bidder"
     });
   } catch (e: any) {
     return NextResponse.json(
@@ -471,6 +494,10 @@ export async function POST(req: Request) {
 
 export async function GET(req: Request) {
   try {
+    if (!getInternalSecretOk(req)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const url = new URL(req.url);
     const targetDate = (url.searchParams.get("target_date") || currentTargetDate()).trim();
 
