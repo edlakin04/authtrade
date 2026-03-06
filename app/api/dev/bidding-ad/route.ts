@@ -28,7 +28,7 @@ function toDateOnlyUtc(d: Date) {
 
 function currentTargetDate(now = new Date()) {
   const todayUtc = startOfUtcDay(now);
-  return toDateOnlyUtc(addUtcDays(todayUtc, 1));
+  return toDateOnlyUtc(addUtcDays(todayUtc));
 }
 
 function safeTrim(v: FormDataEntryValue | null) {
@@ -79,10 +79,10 @@ function scheduleForTargetDate(targetDate: string) {
     Date.UTC(prevDay.getUTCFullYear(), prevDay.getUTCMonth(), prevDay.getUTCDate(), 23, 0, 0, 0)
   );
   const auctionStartsAt = new Date(
-    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 11, 0, 0, 0)
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 20, 30, 0, 0)
   );
   const auctionEndsAt = new Date(
-    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 12, 0, 0, 0)
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 21, 30, 0, 0)
   );
 
   return {
