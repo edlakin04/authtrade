@@ -39,11 +39,9 @@ type Post = {
   content: string;
   created_at: string;
 
-  // ✅ optional image (existing)
-  image_url?: string | null; // signed URL
-  image_path?: string | null; // storage path
+  image_url?: string | null;
+  image_path?: string | null;
 
-  // ✅ NEW: optional poll attached to dev update post
   poll?: Poll | null;
 };
 
@@ -128,20 +126,100 @@ type GoldenHourStatus = {
   }>;
 };
 
-const BANNER_MAX_BYTES = 15 * 1024 * 1024; // 15MB
+type BiddingAdStatus = {
+  ok: true;
+  targetDate: string;
+  schedule: {
+    entryOpensAt: string;
+    auctionStartsAt: string;
+    auctionEndsAt: string;
+  };
+  pricing: {
+    entryFeeSol: number;
+    entryFeeLamports: number;
+  };
+  eligibility: {
+    isEligible: boolean;
+    avgRating: number | null;
+    reviewCount: number;
+  };
+  ui: {
+    entryOpen: boolean;
+    auctionLive: boolean;
+    auctionClosed: boolean;
+    hasEntered: boolean;
+    iWon: boolean;
+    state: "can_enter" | "entered" | "auction_live" | "won" | "lost" | "closed";
+  };
+  auction: {
+    id: string;
+    target_date: string;
+    entry_opens_at: string;
+    auction_starts_at: string;
+    auction_ends_at: string;
+    status: "scheduled" | "live" | "awaiting_payment" | "completed" | "rolled_over" | "cancelled";
+    highest_bid_lamports: number | null;
+    highest_bidder_wallet: string | null;
+    highest_bid_entry_id: string | null;
+    last_bid_at: string | null;
+    bid_count: number;
+    created_at: string;
+    updated_at: string;
+  };
+  entry: {
+    id: string;
+    auction_id: string;
+    target_date: string;
+    dev_wallet: string;
+    coin_id: string;
+    banner_path: string;
+    coin_title: string | null;
+    token_address: string | null;
+    entry_fee_lamports: number;
+    entry_payment_status: "pending" | "paid" | "failed" | "refunded";
+    created_at: string;
+    updated_at: string;
+  } | null;
+  winner: {
+    id: string;
+    auction_id: string;
+    target_date: string;
+    entry_id: string;
+    bid_id: string;
+    dev_wallet: string;
+    coin_id: string;
+    banner_path: string;
+    amount_lamports: number;
+    ad_starts_at: string;
+    ad_ends_at: string;
+    payment_confirmed_at: string | null;
+    created_at: string;
+  } | null;
+  ownedCoins: Array<{
+    id: string;
+    wallet: string;
+    token_address: string;
+    title: string | null;
+    description: string | null;
+    created_at: string;
+  }>;
+};
+
+const BANNER_MAX_BYTES = 15 * 1024 * 1024;
 const BANNER_ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
-// Recommended banner ~3:1
 const BANNER_RECOMMENDED = "1500×500 (3:1)";
 
-// ✅ Coin banner upload constraints (same as dev banner)
-const COIN_BANNER_MAX_BYTES = 15 * 1024 * 1024; // 15MB
+const COIN_BANNER_MAX_BYTES = 15 * 1024 * 1024;
 const COIN_BANNER_ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
 const COIN_BANNER_RECOMMENDED = "1500×500 (3:1)";
 
-// ✅ Golden Hour banner constraints
-const GOLDEN_HOUR_BANNER_MAX_BYTES = 15 * 1024 * 1024; // 15MB
+const GOLDEN_HOUR_BANNER_MAX_BYTES = 15 * 1024 * 1024;
 const GOLDEN_HOUR_BANNER_ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
 const GOLDEN_HOUR_BANNER_RECOMMENDED = "1500×500 (3:1)";
+
+const BIDDING_AD_BANNER_MAX_BYTES = 15 * 1024 * 1024;
+const BIDDING_AD_BANNER_ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
+const BIDDING_AD_BANNER_RECOMMENDED = "1500×500 (3:1)";
 
 export default function DevProfilePage() {
   const [loading, setLoading] = useState(true);
@@ -154,12 +232,10 @@ export default function DevProfilePage() {
   const [bio, setBio] = useState("");
   const [xUrl, setXUrl] = useState("");
 
-  // ✅ update composer
   const [postContent, setPostContent] = useState("");
   const [postFile, setPostFile] = useState<File | null>(null);
   const [postBusy, setPostBusy] = useState(false);
 
-  // ✅ poll composer for dev update post
   const [postPollQuestion, setPostPollQuestion] = useState("");
   const [postPollOptions, setPostPollOptions] = useState<string[]>(["", ""]);
   const [postPollBusy, setPostPollBusy] = useState(false);
@@ -168,41 +244,44 @@ export default function DevProfilePage() {
   const [coinTitle, setCoinTitle] = useState("");
   const [coinDesc, setCoinDesc] = useState("");
 
-  // ✅ NEW: coin banner file (optional, uploaded during coin creation)
   const [coinBannerFile, setCoinBannerFile] = useState<File | null>(null);
   const [coinBannerErr, setCoinBannerErr] = useState<string | null>(null);
 
-  // Signed PFP url for previewing current avatar
   const [pfpSignedUrl, setPfpSignedUrl] = useState<string | null>(null);
 
-  // Upload state
   const [pfpFile, setPfpFile] = useState<File | null>(null);
   const [pfpUploading, setPfpUploading] = useState(false);
 
-  // ✅ Banner (signed url + upload)
   const [bannerSignedUrl, setBannerSignedUrl] = useState<string | null>(null);
   const [bannerFile, setBannerFile] = useState<File | null>(null);
   const [bannerUploading, setBannerUploading] = useState(false);
   const [bannerErr, setBannerErr] = useState<string | null>(null);
 
-  // ✅ Golden Hour status
   const [goldenHour, setGoldenHour] = useState<GoldenHourStatus | null>(null);
   const [goldenHourLoading, setGoldenHourLoading] = useState(false);
   const [goldenHourErr, setGoldenHourErr] = useState<string | null>(null);
   const [goldenHourEntryOpen, setGoldenHourEntryOpen] = useState(false);
 
-  // ✅ Golden Hour entry form
   const [goldenHourCoinId, setGoldenHourCoinId] = useState<string>("");
   const [goldenHourBannerFile, setGoldenHourBannerFile] = useState<File | null>(null);
   const [goldenHourBannerErr, setGoldenHourBannerErr] = useState<string | null>(null);
   const [goldenHourSubmitBusy, setGoldenHourSubmitBusy] = useState(false);
   const [goldenHourDeleteBusy, setGoldenHourDeleteBusy] = useState(false);
 
-  // Coin metadata (name/symbol/logo) keyed by mint
+  const [biddingAd, setBiddingAd] = useState<BiddingAdStatus | null>(null);
+  const [biddingAdLoading, setBiddingAdLoading] = useState(false);
+  const [biddingAdErr, setBiddingAdErr] = useState<string | null>(null);
+  const [biddingAdEntryOpen, setBiddingAdEntryOpen] = useState(false);
+
+  const [biddingAdCoinId, setBiddingAdCoinId] = useState<string>("");
+  const [biddingAdBannerFile, setBiddingAdBannerFile] = useState<File | null>(null);
+  const [biddingAdBannerErr, setBiddingAdBannerErr] = useState<string | null>(null);
+  const [biddingAdSubmitBusy, setBiddingAdSubmitBusy] = useState(false);
+  const [biddingAdDeleteBusy, setBiddingAdDeleteBusy] = useState(false);
+
   const [metaByMint, setMetaByMint] = useState<Record<string, LiveMeta | null>>({});
   const [metaLoadingMints, setMetaLoadingMints] = useState<Record<string, boolean>>({});
 
-  // Community status keyed by coin id
   const [communityByCoinId, setCommunityByCoinId] = useState<Record<string, Community | null>>({});
   const [communityLoadingByCoinId, setCommunityLoadingByCoinId] = useState<Record<string, boolean>>({});
   const [communityCreatingByCoinId, setCommunityCreatingByCoinId] = useState<Record<string, boolean>>({});
@@ -227,6 +306,26 @@ export default function DevProfilePage() {
     }
   }
 
+  async function refreshBiddingAd() {
+    setBiddingAdLoading(true);
+    setBiddingAdErr(null);
+    try {
+      const res = await fetch("/api/dev/bidding-ad", { cache: "no-store" });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setBiddingAd(null);
+        setBiddingAdErr(json?.error ?? "Failed to load Bidding Ad");
+        return;
+      }
+      setBiddingAd(json as BiddingAdStatus);
+    } catch (e: any) {
+      setBiddingAd(null);
+      setBiddingAdErr(e?.message ?? "Failed to load Bidding Ad");
+    } finally {
+      setBiddingAdLoading(false);
+    }
+  }
+
   async function refresh() {
     setLoading(true);
     const res = await fetch("/api/dev/profile", { cache: "no-store" });
@@ -248,7 +347,6 @@ export default function DevProfilePage() {
       setXUrl(data.profile.x_url ?? "");
     }
 
-    // Fetch signed url for current wallet’s pfp + banner
     const w = data?.profile?.wallet;
     if (w) {
       const p = await fetch(`/api/public/pfp?wallet=${encodeURIComponent(w)}`, { cache: "no-store" })
@@ -269,13 +367,12 @@ export default function DevProfilePage() {
   useEffect(() => {
     refresh();
     refreshGoldenHour();
+    refreshBiddingAd();
   }, []);
 
-  // ---- Coin meta fetching (same source as coin page: /api/coin-live) ----
   async function fetchCoinMeta(mint: string) {
     const m = (mint || "").trim();
     if (!m) return;
-
     if (Object.prototype.hasOwnProperty.call(metaByMint, m)) return;
 
     setMetaLoadingMints((prev) => ({ ...prev, [m]: true }));
@@ -312,11 +409,9 @@ export default function DevProfilePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coins]);
 
-  // ---- Community status fetching (per coin) ----
   async function fetchCommunityForCoin(coinId: string) {
     const id = (coinId || "").trim();
     if (!id) return;
-
     if (Object.prototype.hasOwnProperty.call(communityByCoinId, id)) return;
 
     setCommunityLoadingByCoinId((prev) => ({ ...prev, [id]: true }));
@@ -416,7 +511,6 @@ export default function DevProfilePage() {
     }
   }
 
-  // ✅ Banner upload (15MB, wide image)
   async function uploadBanner() {
     if (!bannerFile) return;
 
@@ -456,7 +550,6 @@ export default function DevProfilePage() {
     }
   }
 
-  // ✅ Create update with optional image and/or poll
   async function createPost() {
     const content = postContent.trim();
 
@@ -477,12 +570,9 @@ export default function DevProfilePage() {
     setPostBusy(true);
     try {
       const fd = new FormData();
-
-      // ✅ only send content if it exists; poll-only is allowed
       if (content.length >= 2) fd.append("content", content);
       if (postFile) fd.append("file", postFile);
 
-      // ✅ only send poll fields if poll is valid
       if (pollValid) {
         fd.append("poll_question", q);
         fd.append("poll_options", JSON.stringify(opts));
@@ -507,7 +597,6 @@ export default function DevProfilePage() {
     }
   }
 
-  // ✅ vote on a poll attached to a dev update post
   async function voteDevPostPoll(pollId: string, optionId: string) {
     try {
       const res = await fetch(`/api/dev/posts/polls/${encodeURIComponent(pollId)}/vote`, {
@@ -573,7 +662,6 @@ export default function DevProfilePage() {
   async function addCoin() {
     setCoinBannerErr(null);
 
-    // If banner selected, validate it
     if (coinBannerFile) {
       if (!COIN_BANNER_ALLOWED.has(coinBannerFile.type)) {
         setCoinBannerErr("Invalid banner type. Allowed: JPG, PNG, WEBP.");
@@ -589,7 +677,6 @@ export default function DevProfilePage() {
       }
     }
 
-    // ✅ switched to FormData so we can include the file
     const fd = new FormData();
     fd.append("token_address", coinAddr);
     fd.append("title", coinTitle || "");
@@ -611,6 +698,7 @@ export default function DevProfilePage() {
     setCoinBannerErr(null);
     await refresh();
     await refreshGoldenHour();
+    await refreshBiddingAd();
   }
 
   async function submitGoldenHourEntry() {
@@ -692,6 +780,89 @@ export default function DevProfilePage() {
     }
   }
 
+  async function submitBiddingAdEntry() {
+    setBiddingAdBannerErr(null);
+
+    if (!biddingAdCoinId) {
+      setBiddingAdBannerErr("Choose one of your coins.");
+      return;
+    }
+
+    const hasExistingBanner = !!biddingAd?.entry?.banner_path;
+
+    if (!biddingAdBannerFile && !hasExistingBanner) {
+      setBiddingAdBannerErr("Choose a banner.");
+      return;
+    }
+
+    if (biddingAdBannerFile) {
+      if (!BIDDING_AD_BANNER_ALLOWED.has(biddingAdBannerFile.type)) {
+        setBiddingAdBannerErr("Invalid banner type. Allowed: JPG, PNG, WEBP.");
+        return;
+      }
+
+      if (biddingAdBannerFile.size <= 0) {
+        setBiddingAdBannerErr("Empty banner file.");
+        return;
+      }
+
+      if (biddingAdBannerFile.size > BIDDING_AD_BANNER_MAX_BYTES) {
+        setBiddingAdBannerErr("Banner too large (max 15MB).");
+        return;
+      }
+    }
+
+    setBiddingAdSubmitBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("coin_id", biddingAdCoinId);
+      if (biddingAdBannerFile) fd.append("file", biddingAdBannerFile);
+
+      const res = await fetch("/api/dev/bidding-ad", {
+        method: "POST",
+        body: fd
+      });
+
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setBiddingAdBannerErr(json?.error ?? "Failed to save bidding ad entry");
+        return;
+      }
+
+      setBiddingAdEntryOpen(false);
+      setBiddingAdBannerFile(null);
+      setBiddingAdBannerErr(null);
+      await refreshBiddingAd();
+    } finally {
+      setBiddingAdSubmitBusy(false);
+    }
+  }
+
+  async function removeBiddingAdEntry() {
+    const ok = confirm("Remove your bidding ad entry?");
+    if (!ok) return;
+
+    setBiddingAdDeleteBusy(true);
+    try {
+      const res = await fetch("/api/dev/bidding-ad", {
+        method: "DELETE"
+      });
+
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(json?.error ?? "Failed to remove bidding ad entry");
+        return;
+      }
+
+      setBiddingAdCoinId("");
+      setBiddingAdBannerFile(null);
+      setBiddingAdBannerErr(null);
+      await refreshBiddingAd();
+    } finally {
+      setBiddingAdDeleteBusy(false);
+    }
+  }
+
   async function deleteProfile() {
     const ok = confirm("Delete your dev profile and remove all your posts + coins?");
     if (!ok) return;
@@ -737,7 +908,6 @@ export default function DevProfilePage() {
     };
   }, [bannerLocalPreview]);
 
-  // ✅ local preview for coin banner
   const coinBannerLocalPreview = useMemo(() => {
     if (!coinBannerFile) return null;
     return URL.createObjectURL(coinBannerFile);
@@ -749,7 +919,6 @@ export default function DevProfilePage() {
     };
   }, [coinBannerLocalPreview]);
 
-  // ✅ local preview for Golden Hour banner
   const goldenHourBannerLocalPreview = useMemo(() => {
     if (!goldenHourBannerFile) return null;
     return URL.createObjectURL(goldenHourBannerFile);
@@ -761,7 +930,17 @@ export default function DevProfilePage() {
     };
   }, [goldenHourBannerLocalPreview]);
 
-  // Client-side "wide" sanity check (doesn't block if we can't read)
+  const biddingAdBannerLocalPreview = useMemo(() => {
+    if (!biddingAdBannerFile) return null;
+    return URL.createObjectURL(biddingAdBannerFile);
+  }, [biddingAdBannerFile]);
+
+  useEffect(() => {
+    return () => {
+      if (biddingAdBannerLocalPreview) URL.revokeObjectURL(biddingAdBannerLocalPreview);
+    };
+  }, [biddingAdBannerLocalPreview]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -790,32 +969,25 @@ export default function DevProfilePage() {
         URL.revokeObjectURL(url);
 
         if (cancelled) return;
-
-        // Basic rule: must be wider than tall (banner-ish)
         if (!(dims.w > dims.h)) {
           setBannerErr(`Banner should be wide (recommended ${BANNER_RECOMMENDED}).`);
           return;
         }
 
-        // Optional: warn if very close to square
         const ratio = dims.w / dims.h;
         if (ratio < 1.6) {
           setBannerErr(`Banner looks too square (recommended ${BANNER_RECOMMENDED}).`);
           return;
         }
-      } catch {
-        // If we can't load it, don't hard-block.
-      }
+      } catch {}
     }
 
     checkAspect();
-
     return () => {
       cancelled = true;
     };
   }, [bannerFile]);
 
-  // ✅ coin banner aspect check (same idea)
   useEffect(() => {
     let cancelled = false;
 
@@ -844,7 +1016,6 @@ export default function DevProfilePage() {
         URL.revokeObjectURL(url);
 
         if (cancelled) return;
-
         if (!(dims.w > dims.h)) {
           setCoinBannerErr(`Banner should be wide (recommended ${COIN_BANNER_RECOMMENDED}).`);
           return;
@@ -855,19 +1026,15 @@ export default function DevProfilePage() {
           setCoinBannerErr(`Banner looks too square (recommended ${COIN_BANNER_RECOMMENDED}).`);
           return;
         }
-      } catch {
-        // don't hard block
-      }
+      } catch {}
     }
 
     checkCoinAspect();
-
     return () => {
       cancelled = true;
     };
   }, [coinBannerFile]);
 
-  // ✅ Golden Hour banner aspect check
   useEffect(() => {
     let cancelled = false;
 
@@ -896,7 +1063,6 @@ export default function DevProfilePage() {
         URL.revokeObjectURL(url);
 
         if (cancelled) return;
-
         if (!(dims.w > dims.h)) {
           setGoldenHourBannerErr(`Banner should be wide (recommended ${GOLDEN_HOUR_BANNER_RECOMMENDED}).`);
           return;
@@ -907,17 +1073,61 @@ export default function DevProfilePage() {
           setGoldenHourBannerErr(`Banner looks too square (recommended ${GOLDEN_HOUR_BANNER_RECOMMENDED}).`);
           return;
         }
-      } catch {
-        // don't hard block
-      }
+      } catch {}
     }
 
     checkGoldenHourAspect();
-
     return () => {
       cancelled = true;
     };
   }, [goldenHourBannerFile]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkBiddingAdAspect() {
+      setBiddingAdBannerErr(null);
+      if (!biddingAdBannerFile) return;
+
+      if (!BIDDING_AD_BANNER_ALLOWED.has(biddingAdBannerFile.type)) {
+        setBiddingAdBannerErr("Invalid banner type. Allowed: JPG, PNG, WEBP.");
+        return;
+      }
+
+      if (biddingAdBannerFile.size > BIDDING_AD_BANNER_MAX_BYTES) {
+        setBiddingAdBannerErr("Banner too large (max 15MB).");
+        return;
+      }
+
+      try {
+        const url = URL.createObjectURL(biddingAdBannerFile);
+        const img = new Image();
+        const dims = await new Promise<{ w: number; h: number }>((resolve, reject) => {
+          img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+          img.onerror = reject;
+          img.src = url;
+        });
+        URL.revokeObjectURL(url);
+
+        if (cancelled) return;
+        if (!(dims.w > dims.h)) {
+          setBiddingAdBannerErr(`Banner should be wide (recommended ${BIDDING_AD_BANNER_RECOMMENDED}).`);
+          return;
+        }
+
+        const ratio = dims.w / dims.h;
+        if (ratio < 1.6) {
+          setBiddingAdBannerErr(`Banner looks too square (recommended ${BIDDING_AD_BANNER_RECOMMENDED}).`);
+          return;
+        }
+      } catch {}
+    }
+
+    checkBiddingAdAspect();
+    return () => {
+      cancelled = true;
+    };
+  }, [biddingAdBannerFile]);
 
   useEffect(() => {
     if (!goldenHourEntryOpen) return;
@@ -933,6 +1143,21 @@ export default function DevProfilePage() {
     setGoldenHourBannerErr(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [goldenHourEntryOpen, goldenHour?.entry?.coin_id, goldenHour?.ownedCoins?.length]);
+
+  useEffect(() => {
+    if (!biddingAdEntryOpen) return;
+
+    if (biddingAd?.entry?.coin_id) {
+      setBiddingAdCoinId(biddingAd.entry.coin_id);
+    } else if (biddingAd?.ownedCoins?.length === 1) {
+      setBiddingAdCoinId(biddingAd.ownedCoins[0].id);
+    } else if (!biddingAdCoinId) {
+      setBiddingAdCoinId("");
+    }
+
+    setBiddingAdBannerErr(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [biddingAdEntryOpen, biddingAd?.entry?.coin_id, biddingAd?.ownedCoins?.length]);
 
   const postButtonEnabled =
     postContent.trim().length >= 2 ||
@@ -951,7 +1176,27 @@ export default function DevProfilePage() {
 
   const selectedGoldenHourCoin = goldenHour?.ownedCoins?.find((c) => c.id === goldenHourCoinId) ?? null;
 
+  const biddingAdState = biddingAd?.ui?.state ?? null;
+  const biddingAdAvg = biddingAd?.eligibility?.avgRating ?? null;
+  const biddingAdEntryCoin =
+    biddingAd?.entry?.coin_title?.trim() ||
+    biddingAd?.ownedCoins?.find((c) => c.id === biddingAd?.entry?.coin_id)?.title ||
+    biddingAd?.entry?.token_address ||
+    null;
+
+  const selectedBiddingAdCoin = biddingAd?.ownedCoins?.find((c) => c.id === biddingAdCoinId) ?? null;
+  const biddingAdCanSave =
+    biddingAdState === "can_enter" &&
+    !!biddingAdCoinId &&
+    (!!biddingAdBannerFile || !!biddingAd?.entry?.banner_path) &&
+    !biddingAdBannerErr;
+
   function formatGoldenHourDate(iso?: string | null) {
+    if (!iso) return "—";
+    return new Date(iso).toLocaleString();
+  }
+
+  function formatBiddingAdDate(iso?: string | null) {
     if (!iso) return "—";
     return new Date(iso).toLocaleString();
   }
@@ -976,12 +1221,31 @@ export default function DevProfilePage() {
     return "Golden Hour entry is currently closed.";
   }
 
+  function biddingAdStatusText() {
+    if (!biddingAd) return "Loading Bidding Ad…";
+    if (biddingAdState === "can_enter") {
+      return "Entry is open. Choose your coin, upload your banner, and join the paid auction.";
+    }
+    if (biddingAdState === "entered") {
+      return "You’re entered for tomorrow’s paid bidding ad.";
+    }
+    if (biddingAdState === "auction_live") {
+      return "Auction is live. Go to the auction page to bid or monitor the result.";
+    }
+    if (biddingAdState === "won") {
+      return "You won the paid ad slot.";
+    }
+    if (biddingAdState === "lost") {
+      return "Auction ended and another dev won the paid ad slot.";
+    }
+    return "Entry is currently closed.";
+  }
+
   return (
     <main className="min-h-screen bg-authswap text-white">
       <TopNav />
 
       <div className="mx-auto max-w-5xl px-6 py-10">
-        {/* ✅ Banner at top */}
         <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/30">
           <div className="relative">
             {bannerPreviewUrl ? (
@@ -1048,7 +1312,6 @@ export default function DevProfilePage() {
         <h1 className="mt-6 text-2xl font-semibold">Dev Profile</h1>
         <p className="mt-1 text-sm text-zinc-400">Edit your public profile, post updates, and list coins.</p>
 
-        {/* ✅ GOLDEN HOUR SECTION */}
         <div className="mt-6 rounded-2xl border border-yellow-400/20 bg-white/5 p-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="min-w-0">
@@ -1158,6 +1421,134 @@ export default function DevProfilePage() {
                   <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
                     <div className="text-[11px] uppercase tracking-wide text-zinc-500">Golden Hour ends</div>
                     <div className="mt-1 text-zinc-200">{formatGoldenHourDate(goldenHour?.schedule?.endsAt)}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-6 rounded-2xl border border-cyan-400/20 bg-white/5 p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-lg font-semibold">Bidding Ad</h2>
+                <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-cyan-200">
+                  Paid dashboard ad
+                </span>
+              </div>
+
+              <p className="mt-1 text-sm text-zinc-400">
+                Enter the paid ad auction for tomorrow. Pick one of your coins and upload the banner you want to use.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {biddingAd?.ui?.hasEntered ? (
+                <Link
+                  href={`/ads/auction/${encodeURIComponent(biddingAd.targetDate)}`}
+                  className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200"
+                >
+                  Go to auction
+                </Link>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={() => setBiddingAdEntryOpen(true)}
+                disabled={biddingAdLoading || biddingAdState !== "can_enter"}
+                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-60"
+              >
+                {biddingAdLoading ? "Loading…" : biddingAdState === "can_enter" ? "Enter Bidding Ad" : "Bidding Ad"}
+              </button>
+
+              {biddingAd?.ui?.hasEntered && biddingAdState === "entered" ? (
+                <button
+                  type="button"
+                  onClick={removeBiddingAdEntry}
+                  disabled={biddingAdDeleteBusy}
+                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-60"
+                >
+                  {biddingAdDeleteBusy ? "Removing…" : "Remove entry"}
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          {biddingAdErr ? (
+            <div className="mt-4 rounded-xl border border-red-400/20 bg-red-400/10 p-4 text-sm text-red-200">
+              {biddingAdErr}
+            </div>
+          ) : null}
+
+          {!biddingAdErr ? (
+            <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+              <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                <div className="text-sm font-semibold text-zinc-100">Status</div>
+                <div className="mt-2 text-sm text-zinc-200">{biddingAdStatusText()}</div>
+
+                <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-zinc-400">
+                  <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
+                    Entry fee: {biddingAd?.pricing?.entryFeeSol ?? 1} SOL
+                  </span>
+                  <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
+                    Rating: {biddingAdAvg == null ? "—" : biddingAdAvg.toFixed(2)}
+                  </span>
+                  <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
+                    Reviews: {biddingAd?.eligibility?.reviewCount ?? 0}
+                  </span>
+                  <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
+                    Target day: {biddingAd?.targetDate ?? "—"}
+                  </span>
+                </div>
+
+                {biddingAd?.entry ? (
+                  <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3">
+                    <div className="text-xs font-semibold text-zinc-200">Current entry</div>
+                    <div className="mt-2 text-sm text-zinc-300">
+                      Coin: <span className="font-semibold text-zinc-100">{biddingAdEntryCoin || "Selected coin"}</span>
+                    </div>
+                    {biddingAd.entry.token_address ? (
+                      <div className="mt-1 break-all font-mono text-xs text-zinc-500">{biddingAd.entry.token_address}</div>
+                    ) : null}
+                    <div className="mt-2 text-xs text-zinc-500">
+                      Entry fee status: {biddingAd.entry.entry_payment_status}
+                    </div>
+                  </div>
+                ) : null}
+
+                {biddingAd?.winner ? (
+                  <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3">
+                    <div className="text-xs font-semibold text-zinc-200">Winner</div>
+                    <div className="mt-2 text-sm text-zinc-300">
+                      {biddingAd.ui.iWon ? "You won this bidding ad slot." : "Another dev won this bidding ad slot."}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                <div className="text-sm font-semibold text-zinc-100">Schedule</div>
+
+                <div className="mt-3 space-y-2 text-sm">
+                  <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                    <div className="text-[11px] uppercase tracking-wide text-zinc-500">Entry opens</div>
+                    <div className="mt-1 text-zinc-200">{formatBiddingAdDate(biddingAd?.schedule?.entryOpensAt)}</div>
+                  </div>
+
+                  <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                    <div className="text-[11px] uppercase tracking-wide text-zinc-500">Auction starts</div>
+                    <div className="mt-1 text-zinc-200">{formatBiddingAdDate(biddingAd?.schedule?.auctionStartsAt)}</div>
+                  </div>
+
+                  <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                    <div className="text-[11px] uppercase tracking-wide text-zinc-500">Auction ends</div>
+                    <div className="mt-1 text-zinc-200">{formatBiddingAdDate(biddingAd?.schedule?.auctionEndsAt)}</div>
+                  </div>
+
+                  <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                    <div className="text-[11px] uppercase tracking-wide text-zinc-500">Bids placed</div>
+                    <div className="mt-1 text-zinc-200">{biddingAd?.auction?.bid_count ?? 0}</div>
                   </div>
                 </div>
               </div>
@@ -1306,6 +1697,143 @@ export default function DevProfilePage() {
           </div>
         ) : null}
 
+        {biddingAdEntryOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+            <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-zinc-950 p-5 shadow-2xl">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-semibold">Bidding Ad entry</h3>
+                  <p className="mt-1 text-sm text-zinc-400">
+                    Pick your coin and banner for tomorrow’s paid auction. Entry fee: {biddingAd?.pricing?.entryFeeSol ?? 1} SOL.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBiddingAdEntryOpen(false);
+                    setBiddingAdBannerErr(null);
+                  }}
+                  className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-4">
+                <div className="text-sm text-zinc-200">{biddingAdStatusText()}</div>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                <div>
+                  <label className="text-sm font-semibold text-zinc-100">Select coin</label>
+                  <select
+                    value={biddingAdCoinId}
+                    onChange={(e) => setBiddingAdCoinId(e.target.value)}
+                    disabled={biddingAdSubmitBusy}
+                    className="mt-2 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
+                  >
+                    <option value="">Choose one of your coins</option>
+                    {(biddingAd?.ownedCoins ?? []).map((coin) => (
+                      <option key={coin.id} value={coin.id}>
+                        {coin.title?.trim() || coin.token_address}
+                      </option>
+                    ))}
+                  </select>
+
+                  {selectedBiddingAdCoin ? (
+                    <div className="mt-2 rounded-xl border border-white/10 bg-black/20 p-3">
+                      <div className="text-sm text-zinc-200">
+                        {selectedBiddingAdCoin.title?.trim() || "Untitled coin"}
+                      </div>
+                      <div className="mt-1 break-all font-mono text-xs text-zinc-500">
+                        {selectedBiddingAdCoin.token_address}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold">Bidding Ad banner</div>
+                      <div className="mt-1 text-xs text-zinc-400">
+                        Wide image recommended {BIDDING_AD_BANNER_RECOMMENDED} • JPG/PNG/WEBP • max 15MB
+                      </div>
+                      {biddingAdBannerErr ? <div className="mt-2 text-xs text-red-200">{biddingAdBannerErr}</div> : null}
+                    </div>
+
+                    {biddingAdBannerFile ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBiddingAdBannerFile(null);
+                          setBiddingAdBannerErr(null);
+                        }}
+                        className="shrink-0 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10"
+                      >
+                        Remove
+                      </button>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <label className="cursor-pointer rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10">
+                      Choose banner
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0] || null;
+                          setBiddingAdBannerFile(f);
+                        }}
+                      />
+                    </label>
+
+                    {biddingAdBannerFile ? (
+                      <span className="text-xs text-zinc-400">
+                        {biddingAdBannerFile.name} • {(biddingAdBannerFile.size / (1024 * 1024)).toFixed(2)}MB
+                      </span>
+                    ) : biddingAd?.entry?.banner_path ? (
+                      <span className="text-xs text-zinc-500">Using your saved banner unless you choose a new one.</span>
+                    ) : (
+                      <span className="text-xs text-zinc-500">No banner selected.</span>
+                    )}
+                  </div>
+
+                  {biddingAdBannerLocalPreview ? (
+                    <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-black/20">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={biddingAdBannerLocalPreview} alt="" className="h-40 w-full object-cover" />
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-wrap justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={removeBiddingAdEntry}
+                  disabled={!biddingAd?.ui?.hasEntered || biddingAdDeleteBusy || biddingAdSubmitBusy}
+                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-60"
+                >
+                  {biddingAdDeleteBusy ? "Removing…" : "Remove entry"}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={submitBiddingAdEntry}
+                  disabled={biddingAdSubmitBusy || !biddingAdCanSave}
+                  className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+                >
+                  {biddingAdSubmitBusy ? "Saving…" : biddingAd?.ui?.hasEntered ? "Update entry" : "Save entry"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {loading ? (
           <div className="mt-6 text-zinc-400">Loading…</div>
         ) : (
@@ -1313,7 +1841,6 @@ export default function DevProfilePage() {
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
               <h2 className="text-lg font-semibold">Profile</h2>
 
-              {/* Avatar upload */}
               <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4">
                 <div className="flex items-center gap-4">
                   <div className="h-14 w-14 overflow-hidden rounded-full border border-white/10 bg-white/5">
@@ -1398,7 +1925,6 @@ export default function DevProfilePage() {
               </button>
             </div>
 
-            {/* ✅ Updates (now supports image upload + optional poll) */}
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
               <h2 className="text-lg font-semibold">Post an update</h2>
 
@@ -1410,7 +1936,6 @@ export default function DevProfilePage() {
                 maxLength={500}
               />
 
-              {/* ✅ Poll builder (optional) */}
               <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-4">
                 <div className="text-sm font-semibold">Add a poll (optional)</div>
                 <div className="mt-1 text-xs text-zinc-400">
@@ -1480,7 +2005,6 @@ export default function DevProfilePage() {
                 </div>
               </div>
 
-              {/* Image picker */}
               <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -1568,7 +2092,6 @@ export default function DevProfilePage() {
               </div>
             </div>
 
-            {/* Coins */}
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5 lg:col-span-2">
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -1604,7 +2127,6 @@ export default function DevProfilePage() {
                 />
               </div>
 
-              {/* ✅ NEW: coin banner picker + preview */}
               <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
