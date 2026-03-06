@@ -1,4 +1,3 @@
-// app/api/internal/bidding-ad/settle/route.ts
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
@@ -27,7 +26,6 @@ function currentTargetDate(now = new Date()) {
 function adWindowForTargetDate(targetDate: string) {
   const day = new Date(`${targetDate}T00:00:00.000Z`);
 
-  // Golden hour is 12:00 -> 13:00 UTC, paid ad starts right after for 23h
   const adStartsAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 13, 0, 0, 0));
   const adEndsAt = new Date(adStartsAt.getTime() + 23 * 60 * 60 * 1000);
 
@@ -122,6 +120,7 @@ async function getOrderedValidBids(auctionId: string) {
       `
       id,
       auction_id,
+      target_date,
       entry_id,
       bidder_wallet,
       amount_lamports,
@@ -147,7 +146,7 @@ async function getOrderedValidBids(auctionId: string) {
     )
     .eq("auction_id", auctionId)
     .order("amount_lamports", { ascending: false })
-    .order("placed_at", { ascending: false });
+    .order("placed_at", { ascending: true });
 
   if (error) throw new Error(error.message);
 
@@ -266,7 +265,8 @@ async function createWinnerFromQueueRow(queueRow: any) {
       amount_lamports: queueRow.amount_lamports,
       ad_starts_at: adStartsAt.toISOString(),
       ad_ends_at: adEndsAt.toISOString(),
-      payment_confirmed_at: queueRow.paid_at ?? new Date().toISOString()
+      payment_confirmed_at: queueRow.paid_at ?? new Date().toISOString(),
+      payment_signature: null
     })
     .select(
       "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, payment_signature, created_at"
@@ -316,10 +316,7 @@ export async function POST(req: Request) {
     const auctionEndsAtMs = Date.parse(String(auction.auction_ends_at));
 
     if (Number.isFinite(auctionEndsAtMs) && now.getTime() < auctionEndsAtMs) {
-      return NextResponse.json(
-        { error: "Auction has not ended yet" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Auction has not ended yet" }, { status: 400 });
     }
 
     let updatedAuction = auction;
