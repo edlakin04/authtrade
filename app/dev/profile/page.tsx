@@ -69,6 +69,65 @@ type CommunityGet = {
   viewerIsMember: boolean;
 };
 
+type GoldenHourStatus = {
+  ok: true;
+  targetDate: string;
+  schedule: {
+    optInOpensAt: string;
+    revealAt: string;
+    startsAt: string;
+    endsAt: string;
+  };
+  eligibility: {
+    isEligible: boolean;
+    minRating: number;
+    avgRating: number | null;
+    reviewCount: number;
+  };
+  ui: {
+    optInOpen: boolean;
+    revealLive: boolean;
+    winnerChosen: boolean;
+    activeNow: boolean;
+    hasEntered: boolean;
+    iWon: boolean;
+    iLost: boolean;
+    state: "not_eligible" | "can_enter" | "opted_in" | "won" | "lost" | "closed";
+  };
+  entry: {
+    id: string;
+    target_date: string;
+    dev_wallet: string;
+    coin_id: string;
+    banner_path: string;
+    coin_title: string | null;
+    token_address: string | null;
+    created_at: string;
+    updated_at: string;
+  } | null;
+  winner: {
+    id: string;
+    target_date: string;
+    entry_id: string;
+    dev_wallet: string;
+    coin_id: string;
+    banner_path: string;
+    opt_in_opens_at: string;
+    reveal_at: string;
+    starts_at: string;
+    ends_at: string;
+    created_at: string;
+  } | null;
+  ownedCoins: Array<{
+    id: string;
+    wallet: string;
+    token_address: string;
+    title: string | null;
+    description: string | null;
+    created_at: string;
+  }>;
+};
+
 const BANNER_MAX_BYTES = 15 * 1024 * 1024; // 15MB
 const BANNER_ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
 // Recommended banner ~3:1
@@ -121,6 +180,12 @@ export default function DevProfilePage() {
   const [bannerUploading, setBannerUploading] = useState(false);
   const [bannerErr, setBannerErr] = useState<string | null>(null);
 
+  // ✅ Golden Hour status
+  const [goldenHour, setGoldenHour] = useState<GoldenHourStatus | null>(null);
+  const [goldenHourLoading, setGoldenHourLoading] = useState(false);
+  const [goldenHourErr, setGoldenHourErr] = useState<string | null>(null);
+  const [goldenHourEntryOpen, setGoldenHourEntryOpen] = useState(false);
+
   // Coin metadata (name/symbol/logo) keyed by mint
   const [metaByMint, setMetaByMint] = useState<Record<string, LiveMeta | null>>({});
   const [metaLoadingMints, setMetaLoadingMints] = useState<Record<string, boolean>>({});
@@ -129,6 +194,26 @@ export default function DevProfilePage() {
   const [communityByCoinId, setCommunityByCoinId] = useState<Record<string, Community | null>>({});
   const [communityLoadingByCoinId, setCommunityLoadingByCoinId] = useState<Record<string, boolean>>({});
   const [communityCreatingByCoinId, setCommunityCreatingByCoinId] = useState<Record<string, boolean>>({});
+
+  async function refreshGoldenHour() {
+    setGoldenHourLoading(true);
+    setGoldenHourErr(null);
+    try {
+      const res = await fetch("/api/dev/golden-hour", { cache: "no-store" });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setGoldenHour(null);
+        setGoldenHourErr(json?.error ?? "Failed to load Golden Hour");
+        return;
+      }
+      setGoldenHour(json as GoldenHourStatus);
+    } catch (e: any) {
+      setGoldenHour(null);
+      setGoldenHourErr(e?.message ?? "Failed to load Golden Hour");
+    } finally {
+      setGoldenHourLoading(false);
+    }
+  }
 
   async function refresh() {
     setLoading(true);
@@ -171,6 +256,7 @@ export default function DevProfilePage() {
 
   useEffect(() => {
     refresh();
+    refreshGoldenHour();
   }, []);
 
   // ---- Coin meta fetching (same source as coin page: /api/coin-live) ----
@@ -512,6 +598,7 @@ export default function DevProfilePage() {
     setCoinBannerFile(null);
     setCoinBannerErr(null);
     await refresh();
+    await refreshGoldenHour();
   }
 
   async function deleteProfile() {
@@ -684,6 +771,39 @@ export default function DevProfilePage() {
 
   const bannerPreviewUrl = bannerLocalPreview || bannerSignedUrl;
 
+  const goldenHourState = goldenHour?.ui?.state ?? null;
+  const goldenHourAvg = goldenHour?.eligibility?.avgRating ?? null;
+  const goldenHourEntryCoin =
+    goldenHour?.entry?.coin_title?.trim() ||
+    goldenHour?.ownedCoins?.find((c) => c.id === goldenHour?.entry?.coin_id)?.title ||
+    goldenHour?.entry?.token_address ||
+    null;
+
+  function formatGoldenHourDate(iso?: string | null) {
+    if (!iso) return "—";
+    return new Date(iso).toLocaleString();
+  }
+
+  function goldenHourStatusText() {
+    if (!goldenHour) return "Loading Golden Hour…";
+    if (goldenHourState === "not_eligible") {
+      return `Your average rating must be above ${goldenHour.eligibility.minRating.toFixed(1)} to enter.`;
+    }
+    if (goldenHourState === "can_enter") {
+      return "Opt-in is open for tomorrow’s Golden Hour.";
+    }
+    if (goldenHourState === "opted_in") {
+      return "You’re opted in for tomorrow’s Golden Hour.";
+    }
+    if (goldenHourState === "won") {
+      return "You have won tomorrow’s Golden Hour.";
+    }
+    if (goldenHourState === "lost") {
+      return "You were not selected for tomorrow’s Golden Hour.";
+    }
+    return "Golden Hour entry is currently closed.";
+  }
+
   return (
     <main className="min-h-screen bg-authswap text-white">
       <TopNav />
@@ -755,6 +875,140 @@ export default function DevProfilePage() {
 
         <h1 className="mt-6 text-2xl font-semibold">Dev Profile</h1>
         <p className="mt-1 text-sm text-zinc-400">Edit your public profile, post updates, and list coins.</p>
+
+        {/* ✅ GOLDEN HOUR SECTION */}
+        <div className="mt-6 rounded-2xl border border-yellow-400/20 bg-white/5 p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-lg font-semibold">Golden Hour</h2>
+                <span className="rounded-full border border-yellow-300/20 bg-yellow-300/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-yellow-200">
+                  Free dashboard ad
+                </span>
+              </div>
+
+              <p className="mt-1 text-sm text-zinc-400">
+                Opt in the day before for a chance to get 1 free hour at the top of the dashboard.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setGoldenHourEntryOpen(true)}
+              disabled={goldenHourLoading || goldenHourState !== "can_enter"}
+              className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+            >
+              {goldenHourLoading ? "Loading…" : goldenHourState === "can_enter" ? "Enter Golden Hour" : "Golden Hour"}
+            </button>
+          </div>
+
+          {goldenHourErr ? (
+            <div className="mt-4 rounded-xl border border-red-400/20 bg-red-400/10 p-4 text-sm text-red-200">
+              {goldenHourErr}
+            </div>
+          ) : null}
+
+          {!goldenHourErr ? (
+            <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+              <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                <div className="text-sm font-semibold text-zinc-100">Status</div>
+                <div className="mt-2 text-sm text-zinc-200">{goldenHourStatusText()}</div>
+
+                <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-zinc-400">
+                  <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
+                    Rating: {goldenHourAvg == null ? "—" : goldenHourAvg.toFixed(2)}
+                  </span>
+                  <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
+                    Reviews: {goldenHour?.eligibility?.reviewCount ?? 0}
+                  </span>
+                  <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">
+                    Target day: {goldenHour?.targetDate ?? "—"}
+                  </span>
+                </div>
+
+                {goldenHour?.entry ? (
+                  <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3">
+                    <div className="text-xs font-semibold text-zinc-200">Current entry</div>
+                    <div className="mt-2 text-sm text-zinc-300">
+                      Coin: <span className="font-semibold text-zinc-100">{goldenHourEntryCoin || "Selected coin"}</span>
+                    </div>
+                    {goldenHour.entry.token_address ? (
+                      <div className="mt-1 break-all font-mono text-xs text-zinc-500">{goldenHour.entry.token_address}</div>
+                    ) : null}
+                    <div className="mt-2 text-xs text-zinc-500">Banner selected and entry saved.</div>
+                  </div>
+                ) : null}
+
+                {goldenHour?.winner && goldenHour?.ui?.revealLive ? (
+                  <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3">
+                    <div className="text-xs font-semibold text-zinc-200">Result</div>
+                    <div className="mt-2 text-sm text-zinc-300">
+                      {goldenHour.ui.iWon
+                        ? "You won the Golden Hour slot."
+                        : "A different dev was selected for this Golden Hour slot."}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                <div className="text-sm font-semibold text-zinc-100">Schedule</div>
+
+                <div className="mt-3 space-y-2 text-sm">
+                  <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                    <div className="text-[11px] uppercase tracking-wide text-zinc-500">Opt-in opens</div>
+                    <div className="mt-1 text-zinc-200">{formatGoldenHourDate(goldenHour?.schedule?.optInOpensAt)}</div>
+                  </div>
+
+                  <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                    <div className="text-[11px] uppercase tracking-wide text-zinc-500">Winner revealed</div>
+                    <div className="mt-1 text-zinc-200">{formatGoldenHourDate(goldenHour?.schedule?.revealAt)}</div>
+                  </div>
+
+                  <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                    <div className="text-[11px] uppercase tracking-wide text-zinc-500">Golden Hour starts</div>
+                    <div className="mt-1 text-zinc-200">{formatGoldenHourDate(goldenHour?.schedule?.startsAt)}</div>
+                  </div>
+
+                  <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                    <div className="text-[11px] uppercase tracking-wide text-zinc-500">Golden Hour ends</div>
+                    <div className="mt-1 text-zinc-200">{formatGoldenHourDate(goldenHour?.schedule?.endsAt)}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        {goldenHourEntryOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+            <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-zinc-950 p-5 shadow-2xl">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-semibold">Golden Hour entry</h3>
+                  <p className="mt-1 text-sm text-zinc-400">
+                    The entry card is the next step. This section is now wired and ready for the popup form.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setGoldenHourEntryOpen(false)}
+                  className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-4">
+                <div className="text-sm text-zinc-200">{goldenHourStatusText()}</div>
+                <div className="mt-3 text-xs text-zinc-500">
+                  Next we’ll add coin selection, banner upload/selection, and submit/update entry inside this popup.
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {loading ? (
           <div className="mt-6 text-zinc-400">Loading…</div>
