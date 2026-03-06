@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/internal/golden-hour/pick",
+      "schedule": "0 11 * * *"
+    }
+  ]
+}
