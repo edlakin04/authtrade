@@ -3,6 +3,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import TopNav from "@/components/TopNav";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { Connection, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 
 type AuctionStatus = "scheduled" | "live" | "awaiting_payment" | "completed" | "rolled_over" | "cancelled";
 
@@ -111,6 +113,37 @@ type BidsResponse = {
   bids: BidRow[];
 };
 
+type PaymentQueueRow = {
+  id: string;
+  auction_id: string;
+  target_date?: string;
+  entry_id: string;
+  bid_id: string;
+  bidder_wallet: string;
+  amount_lamports: number;
+  priority_rank: number;
+  status: "queued" | "awaiting_payment" | "paid" | "expired" | "skipped";
+  payment_due_at: string | null;
+  paid_at?: string | null;
+  skipped_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+type PayStatusResponse = {
+  ok: true;
+  auction: BiddingAdStatus["auction"];
+  winner: BiddingAdStatus["winner"] | null;
+  queue: PaymentQueueRow[];
+  me: PaymentQueueRow | null;
+  payment: {
+    is_my_turn: boolean;
+    can_pay: boolean;
+    payment_due_at: string | null;
+    ms_remaining: number | null;
+  };
+};
+
 function shortAddr(s: string | null | undefined) {
   if (!s) return "—";
   return `${s.slice(0, 4)}…${s.slice(-4)}`;
@@ -154,6 +187,17 @@ export default function AuctionPage({
 }: {
   params: Promise<{ targetDate: string }>;
 }) {
+  const { publicKey, connected, sendTransaction } = useWallet();
+
+  const rpcUrl =
+    process.env.NEXT_PUBLIC_SOLANA_RPC_URL ||
+    process.env.NEXT_PUBLIC_RPC_URL ||
+    "https://api.mainnet-beta.solana.com";
+
+  const treasuryWallet = process.env.NEXT_PUBLIC_TREASURY_WALLET || "";
+
+  const connection = useMemo(() => new Connection(rpcUrl, "confirmed"), [rpcUrl]);
+
   const [targetDate, setTargetDate] = useState("");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -162,6 +206,11 @@ export default function AuctionPage({
   const [bidsLoading, setBidsLoading] = useState(true);
   const [bidsErr, setBidsErr] = useState<string | null>(null);
   const [bidsData, setBidsData] = useState<BidsResponse | null>(null);
+
+  const [payLoading, setPayLoading] = useState(false);
+  const [payErr, setPayErr] = useState<string | null>(null);
+  const [payData, setPayData] = useState<PayStatusResponse | null>(null);
+  const [winnerPayBusy, setWinnerPayBusy] = useState(false);
 
   const [nowMs, setNowMs] = useState(Date.now());
   const [bidAmount, setBidAmount] = useState<string>("");
@@ -219,8 +268,31 @@ export default function AuctionPage({
     }
   }
 
+  async function loadPayStatus(date: string, keepExisting = true) {
+    if (!keepExisting) setPayLoading(true);
+    setPayErr(null);
+
+    try {
+      const res = await fetch(`/api/dev/bidding-ad/pay?target_date=${encodeURIComponent(date)}`, {
+        cache: "no-store"
+      });
+      const json = (await res.json().catch(() => null)) as PayStatusResponse | null;
+
+      if (!res.ok) {
+        throw new Error((json as any)?.error || "Failed to load payment status");
+      }
+
+      setPayData(json);
+    } catch (e: any) {
+      setPayErr(e?.message ?? "Failed to load payment status");
+      if (!keepExisting) setPayData(null);
+    } finally {
+      setPayLoading(false);
+    }
+  }
+
   async function refreshAll(date: string, keepExistingBids = true) {
-    await Promise.all([loadPage(date), loadBids(date, keepExistingBids)]);
+    await Promise.all([loadPage(date), loadBids(date, keepExistingBids), loadPayStatus(date, keepExistingBids)]);
   }
 
   useEffect(() => {
@@ -239,14 +311,36 @@ export default function AuctionPage({
 
     const t = setInterval(() => {
       loadBids(targetDate, true);
+      loadPage(targetDate);
     }, 5000);
 
     return () => clearInterval(t);
   }, [targetDate, data?.auction?.status, bidsData?.auction?.status]);
 
-  const displayAuction = bidsData?.auction ?? data?.auction ?? null;
+  useEffect(() => {
+    if (!targetDate) return;
+
+    const isPaymentPhase =
+      data?.auction?.status === "awaiting_payment" ||
+      payData?.auction?.status === "awaiting_payment" ||
+      data?.auction?.status === "completed" ||
+      payData?.auction?.status === "completed" ||
+      data?.auction?.status === "rolled_over" ||
+      payData?.auction?.status === "rolled_over";
+
+    if (!isPaymentPhase) return;
+
+    const t = setInterval(() => {
+      loadPayStatus(targetDate, true);
+      loadPage(targetDate);
+    }, 5000);
+
+    return () => clearInterval(t);
+  }, [targetDate, data?.auction?.status, payData?.auction?.status]);
+
+  const displayAuction = bidsData?.auction ?? payData?.auction ?? data?.auction ?? null;
   const displayEntry = bidsData?.entry ?? data?.entry ?? null;
-  const displayWinner = bidsData?.winner ?? data?.winner ?? null;
+  const displayWinner = payData?.winner ?? bidsData?.winner ?? data?.winner ?? null;
   const displayBids = bidsData?.bids ?? [];
 
   const auctionStartsAtMs = useMemo(() => {
@@ -259,8 +353,14 @@ export default function AuctionPage({
     return iso ? Date.parse(iso) : NaN;
   }, [displayAuction?.auction_ends_at, data?.schedule?.auctionEndsAt]);
 
+  const paymentDueAtMs = useMemo(() => {
+    const iso = payData?.payment?.payment_due_at;
+    return iso ? Date.parse(iso) : NaN;
+  }, [payData?.payment?.payment_due_at]);
+
   const toStartMs = auctionStartsAtMs - nowMs;
   const toEndMs = auctionEndsAtMs - nowMs;
+  const toPaymentDueMs = paymentDueAtMs - nowMs;
 
   const currentHighestSol = fmtSolFromLamports(displayAuction?.highest_bid_lamports ?? null);
   const entryFeeSol = data?.pricing?.entryFeeSol ?? 1;
@@ -278,6 +378,11 @@ export default function AuctionPage({
 
   const nextMinBidSol = displayAuction?.next_min_bid_sol ?? null;
   const nextMinBidLamports = displayAuction?.next_min_bid_lamports ?? null;
+
+  const canPayWinnerNow = !!payData?.payment?.can_pay;
+  const isMyTurnToPay = !!payData?.payment?.is_my_turn;
+  const myQueueRow = payData?.me ?? null;
+  const winnerAmountLamports = Number(myQueueRow?.amount_lamports ?? 0);
 
   async function placeBid() {
     if (!targetDate) return;
@@ -312,9 +417,86 @@ export default function AuctionPage({
       setBidsData(json as BidsResponse);
       setBidAmount("");
 
-      await loadPage(targetDate);
+      await Promise.all([loadPage(targetDate), loadPayStatus(targetDate, true)]);
     } finally {
       setBidBusy(false);
+    }
+  }
+
+  async function payWinningBid() {
+    if (!targetDate) return;
+    if (!canPayWinnerNow || winnerPayBusy) return;
+
+    if (!connected || !publicKey) {
+      alert("Connect the wallet that placed the winning bid first.");
+      return;
+    }
+
+    if (!sendTransaction) {
+      alert("Wallet does not support sending transactions.");
+      return;
+    }
+
+    if (!treasuryWallet) {
+      alert("Treasury wallet is not configured.");
+      return;
+    }
+
+    if (!Number.isFinite(winnerAmountLamports) || winnerAmountLamports <= 0) {
+      alert("Invalid winning payment amount.");
+      return;
+    }
+
+    setWinnerPayBusy(true);
+    try {
+      const treasuryPubkey = new PublicKey(treasuryWallet);
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+
+      const tx = new Transaction({
+        feePayer: publicKey,
+        recentBlockhash: blockhash
+      }).add(
+        SystemProgram.transfer({
+          fromPubkey: publicKey,
+          toPubkey: treasuryPubkey,
+          lamports: winnerAmountLamports
+        })
+      );
+
+      const signature = await sendTransaction(tx, connection, {
+        skipPreflight: false,
+        preflightCommitment: "confirmed"
+      });
+
+      await connection.confirmTransaction(
+        {
+          signature,
+          blockhash,
+          lastValidBlockHeight
+        },
+        "confirmed"
+      );
+
+      const res = await fetch("/api/payments/confirm-bidding-winner", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          signature,
+          target_date: targetDate
+        })
+      });
+
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(json?.error ?? "Winner payment confirmation failed");
+      }
+
+      await refreshAll(targetDate, true);
+      alert("Winning bid paid successfully.");
+    } catch (e: any) {
+      alert(e?.message ?? "Failed to pay winning bid");
+    } finally {
+      setWinnerPayBusy(false);
     }
   }
 
@@ -401,8 +583,18 @@ export default function AuctionPage({
                       <div className="mt-1 text-2xl font-semibold">{fmtCountdown(toEndMs)}</div>
                     </div>
                   ) : displayAuction.status === "awaiting_payment" ? (
-                    <div className="mt-2 text-sm text-zinc-300">
-                      Auction has ended and the current winner is in the payment window.
+                    <div className="mt-2 space-y-2">
+                      <div className="text-sm text-zinc-300">
+                        Auction has ended and the current winner is in the payment window.
+                      </div>
+                      {isMyTurnToPay ? (
+                        <div className="rounded-xl border border-cyan-400/20 bg-cyan-400/10 p-3 text-sm text-cyan-100">
+                          It is your turn to pay.
+                          {Number.isFinite(toPaymentDueMs) ? (
+                            <span className="ml-2 font-semibold">Time left: {fmtCountdown(toPaymentDueMs)}</span>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   ) : displayAuction.status === "completed" ? (
                     <div className="mt-2 text-sm text-zinc-300">Auction completed successfully.</div>
@@ -472,6 +664,39 @@ export default function AuctionPage({
                     </div>
                   </div>
                 ) : null}
+
+                {payErr ? (
+                  <div className="mt-4 rounded-xl border border-red-400/20 bg-red-400/10 p-3 text-sm text-red-200">
+                    {payErr}
+                  </div>
+                ) : null}
+
+                {isMyTurnToPay && myQueueRow ? (
+                  <div className="mt-4 rounded-xl border border-cyan-400/20 bg-cyan-400/10 p-4">
+                    <div className="text-sm font-semibold text-cyan-100">Your payment window is active</div>
+                    <div className="mt-2 text-sm text-cyan-50">
+                      Amount due: <span className="font-semibold">{fmtSolFromLamports(myQueueRow.amount_lamports)}</span>
+                    </div>
+                    <div className="mt-1 text-xs text-cyan-200">
+                      Due by: {fmtDate(payData?.payment?.payment_due_at)}
+                    </div>
+                    {Number.isFinite(toPaymentDueMs) ? (
+                      <div className="mt-2 text-xs text-cyan-200">
+                        Time remaining: {fmtCountdown(toPaymentDueMs)}
+                      </div>
+                    ) : null}
+
+                    <button
+                      onClick={payWinningBid}
+                      disabled={!canPayWinnerNow || winnerPayBusy}
+                      className="mt-4 rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+                    >
+                      {winnerPayBusy
+                        ? "Paying…"
+                        : `Pay ${fmtSolFromLamports(myQueueRow.amount_lamports)}`}
+                    </button>
+                  </div>
+                ) : null}
               </section>
             </div>
 
@@ -539,7 +764,9 @@ export default function AuctionPage({
                     <div className="space-y-2">
                       {displayBids.map((bid) => {
                         const mine = displayEntry?.id === bid.entry_id;
-                        const highest = displayAuction.highest_bid_entry_id === bid.entry_id && displayAuction.highest_bid_lamports === bid.amount_lamports;
+                        const highest =
+                          displayAuction.highest_bid_entry_id === bid.entry_id &&
+                          displayAuction.highest_bid_lamports === bid.amount_lamports;
 
                         return (
                           <div
@@ -584,8 +811,7 @@ export default function AuctionPage({
 
                 {data.ui.iWon ? (
                   <div className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm text-emerald-100">
-                    You are currently the winning dev for this auction. When payment flow is added, this page will show your
-                    payment button here.
+                    You are currently the winning dev for this auction.
                   </div>
                 ) : null}
               </section>
