@@ -28,7 +28,7 @@ function toDateOnlyUtc(d: Date) {
 
 function currentTargetDate(now = new Date()) {
   const todayUtc = startOfUtcDay(now);
-  return toDateOnlyUtc(addUtcDays(todayUtc));
+  return toDateOnlyUtc(todayUtc);
 }
 
 function safeTrim(v: FormDataEntryValue | null) {
