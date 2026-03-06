@@ -37,7 +37,20 @@ function extFromType(type: string) {
   return "bin";
 }
 
-function getEntryFeeLamports() {
+function getTreasuryWallet() {
+  const wallet =
+    process.env.TREASURY_WALLET ||
+    process.env.NEXT_PUBLIC_TREASURY_WALLET ||
+    "";
+
+  if (!wallet.trim()) {
+    throw new Error("Server missing TREASURY_WALLET / NEXT_PUBLIC_TREASURY_WALLET");
+  }
+
+  return wallet.trim();
+}
+
+function getEntryFeeSol() {
   const solRaw = process.env.BIDDING_AD_ENTRY_FEE_SOL ?? "1";
   const sol = Number(solRaw);
 
@@ -45,14 +58,17 @@ function getEntryFeeLamports() {
     throw new Error("Invalid BIDDING_AD_ENTRY_FEE_SOL env value");
   }
 
-  return Math.round(sol * 1_000_000_000);
+  return sol;
+}
+
+function getEntryFeeLamports() {
+  return Math.round(getEntryFeeSol() * 1_000_000_000);
 }
 
 // Auction timing model for a target day:
 // - entry opens on target day at 10:00 UTC
 // - auction starts on target day at 11:00 UTC
 // - auction ends on target day at 12:00 UTC
-// - paid ad will later cover the remaining 23 hours after Golden Hour
 function scheduleForTargetDate(targetDate: string) {
   const day = new Date(`${targetDate}T00:00:00.000Z`);
 
@@ -68,7 +84,6 @@ function scheduleForTargetDate(targetDate: string) {
 }
 
 function currentTargetDate(now = new Date()) {
-  // bidding ad entry is for tomorrow
   const todayUtc = startOfUtcDay(now);
   return toDateOnlyUtc(addUtcDays(todayUtc, 1));
 }
@@ -180,7 +195,7 @@ async function getEntry(wallet: string, targetDate: string) {
   const { data, error } = await sb
     .from("bidding_ad_entries")
     .select(
-      "id, auction_id, target_date, dev_wallet, coin_id, banner_path, coin_title, token_address, entry_fee_lamports, entry_payment_status, created_at, updated_at"
+      "id, auction_id, target_date, dev_wallet, coin_id, banner_path, coin_title, token_address, entry_fee_lamports, entry_payment_status, created_at, updated_at, entry_payment_signature, entry_payment_confirmed_at"
     )
     .eq("dev_wallet", wallet)
     .eq("target_date", targetDate)
@@ -221,7 +236,7 @@ function buildStatus(params: {
   const auctionStartsAt = new Date(params.auction.auction_starts_at);
   const auctionEndsAt = new Date(params.auction.auction_ends_at);
 
-  const isEligible = true; // no rating gate for paid bidding ad
+  const isEligible = true;
   const entryOpen = now >= entryOpensAt && now < auctionStartsAt;
   const auctionLive = now >= auctionStartsAt && now < auctionEndsAt;
   const auctionClosed = now >= auctionEndsAt;
@@ -246,8 +261,9 @@ function buildStatus(params: {
       auctionEndsAt: params.auction.auction_ends_at
     },
     pricing: {
-      entryFeeSol: Number(process.env.BIDDING_AD_ENTRY_FEE_SOL ?? "1"),
-      entryFeeLamports: getEntryFeeLamports()
+      entryFeeSol: getEntryFeeSol(),
+      entryFeeLamports: getEntryFeeLamports(),
+      treasuryWallet: getTreasuryWallet()
     },
     eligibility: {
       isEligible,
@@ -265,16 +281,17 @@ function buildStatus(params: {
     auction: params.auction,
     entry: params.entry,
     winner: params.winner,
-    ownedCoins: params.ownedCoins
+    ownedCoins: params.ownedCoins,
+    payment: {
+      treasuryWallet: getTreasuryWallet(),
+      entryFeeSol: getEntryFeeSol(),
+      entryFeeLamports: getEntryFeeLamports(),
+      entryConfirmed: params.entry?.entry_payment_status === "paid"
+    }
   };
 }
 
-async function uploadBiddingAdBanner(
-  wallet: string,
-  targetDate: string,
-  coinId: string,
-  file: File
-) {
+async function uploadBiddingAdBanner(wallet: string, targetDate: string, coinId: string, file: File) {
   if (!ALLOWED_BANNER_TYPES.has(file.type)) {
     throw new Error("Invalid banner file type. Allowed: JPG, PNG, WEBP.");
   }
@@ -425,14 +442,14 @@ export async function POST(req: Request) {
       coin_title: coinRes.data.title ?? null,
       token_address: coinRes.data.token_address ?? null,
       entry_fee_lamports: getEntryFeeLamports(),
-      entry_payment_status: existingEntry?.entry_payment_status ?? "pending"
+      entry_payment_status: existingEntry?.entry_payment_status === "paid" ? "paid" : "pending"
     };
 
     const upsertRes = await sb
       .from("bidding_ad_entries")
       .upsert(payload, { onConflict: "target_date,dev_wallet" })
       .select(
-        "id, auction_id, target_date, dev_wallet, coin_id, banner_path, coin_title, token_address, entry_fee_lamports, entry_payment_status, created_at, updated_at"
+        "id, auction_id, target_date, dev_wallet, coin_id, banner_path, coin_title, token_address, entry_fee_lamports, entry_payment_status, created_at, updated_at, entry_payment_signature, entry_payment_confirmed_at"
       )
       .single();
 
@@ -442,8 +459,8 @@ export async function POST(req: Request) {
 
     const winner = await getWinner(targetDate);
 
-    return NextResponse.json(
-      buildStatus({
+    return NextResponse.json({
+      ...buildStatus({
         wallet,
         targetDate,
         auction,
@@ -451,8 +468,16 @@ export async function POST(req: Request) {
         winner,
         ownedCoins,
         reviewAgg
-      })
-    );
+      }),
+      paymentRequired: upsertRes.data.entry_payment_status !== "paid",
+      payment: {
+        treasuryWallet: getTreasuryWallet(),
+        entryFeeSol: getEntryFeeSol(),
+        entryFeeLamports: getEntryFeeLamports(),
+        entryConfirmed: upsertRes.data.entry_payment_status === "paid",
+        kind: "bidding_ad_entry"
+      }
+    });
   } catch (e: any) {
     return NextResponse.json(
       { error: "Failed to submit bidding ad entry", details: e?.message ?? String(e) },
@@ -477,10 +502,11 @@ export async function DELETE(req: Request) {
 
     const now = new Date();
 
-    const [reviewAgg, ownedCoins, auction] = await Promise.all([
+    const [reviewAgg, ownedCoins, auction, existingEntry] = await Promise.all([
       getReviewAgg(wallet),
       getOwnedCoins(wallet),
-      getOrCreateAuction(targetDate)
+      getOrCreateAuction(targetDate),
+      getEntry(wallet, targetDate)
     ]);
 
     const entryOpensAt = new Date(auction.entry_opens_at);
@@ -492,6 +518,13 @@ export async function DELETE(req: Request) {
 
     if (now >= auctionStartsAt) {
       return NextResponse.json({ error: "Bidding Ad entry can no longer be removed" }, { status: 400 });
+    }
+
+    if (existingEntry?.entry_payment_status === "paid") {
+      return NextResponse.json(
+        { error: "Paid bidding entries cannot be removed unless you add a refund flow" },
+        { status: 400 }
+      );
     }
 
     const sb = supabaseAdmin();
