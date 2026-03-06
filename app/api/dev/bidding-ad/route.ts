@@ -77,7 +77,7 @@ function getEntryFeeLamports() {
  * - auction starts targetDate at 11:00 UTC
  * - auction ends targetDate at 12:00 UTC
  */
-function biddingAdScheduleForTargetDate(targetDate: string) {
+function scheduleForTargetDate(targetDate: string) {
   const day = new Date(`${targetDate}T00:00:00.000Z`);
   const prevDay = addUtcDays(day, -1);
 
