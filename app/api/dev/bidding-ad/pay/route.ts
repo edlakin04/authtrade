@@ -1,5 +1,6 @@
 // app/api/dev/bidding-ad/pay/route.ts
 import { NextResponse } from "next/server";
+import { Connection, PublicKey } from "@solana/web3.js";
 import { cookies } from "next/headers";
 import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
@@ -37,6 +38,19 @@ function adWindowForTargetDate(targetDate: string) {
     adStartsAt,
     adEndsAt
   };
+}
+
+function getTreasuryWallet() {
+  const wallet =
+    process.env.TREASURY_WALLET ||
+    process.env.NEXT_PUBLIC_TREASURY_WALLET ||
+    "";
+
+  if (!wallet.trim()) {
+    throw new Error("Server missing TREASURY_WALLET / NEXT_PUBLIC_TREASURY_WALLET");
+  }
+
+  return wallet.trim();
 }
 
 async function getViewerWallet() {
@@ -117,7 +131,7 @@ async function getExistingWinner(auctionId: string) {
   const { data, error } = await sb
     .from("bidding_ad_winners")
     .select(
-      "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, created_at"
+      "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, payment_signature, created_at"
     )
     .eq("auction_id", auctionId)
     .maybeSingle();
@@ -183,6 +197,7 @@ async function createWinner(params: {
   bidId: string;
   amountLamports: number;
   paidAtIso: string;
+  signature: string;
 }) {
   const existing = await getExistingWinner(params.auctionId);
   if (existing) return existing;
@@ -206,10 +221,11 @@ async function createWinner(params: {
       amount_lamports: params.amountLamports,
       ad_starts_at: adStartsAt.toISOString(),
       ad_ends_at: adEndsAt.toISOString(),
-      payment_confirmed_at: params.paidAtIso
+      payment_confirmed_at: params.paidAtIso,
+      payment_signature: params.signature
     })
     .select(
-      "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, created_at"
+      "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, payment_signature, created_at"
     )
     .single();
 
@@ -232,6 +248,21 @@ async function getQueue(auctionId: string) {
   return data ?? [];
 }
 
+async function getWinnerBySignature(signature: string) {
+  const sb = supabaseAdmin();
+
+  const { data, error } = await sb
+    .from("bidding_ad_winners")
+    .select(
+      "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, payment_signature, created_at"
+    )
+    .eq("payment_signature", signature)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  return data ?? null;
+}
+
 export async function POST(req: Request) {
   try {
     const wallet = await getViewerWallet();
@@ -245,6 +276,11 @@ export async function POST(req: Request) {
 
     const body = await req.json().catch(() => null);
     const targetDate = ((body?.target_date as string | undefined)?.trim() || currentTargetDate());
+    const signature = (body?.signature as string | undefined)?.trim();
+
+    if (!signature) {
+      return NextResponse.json({ error: "Missing signature" }, { status: 400 });
+    }
 
     const auction = await getAuction(targetDate);
     if (!auction) {
@@ -266,6 +302,17 @@ export async function POST(req: Request) {
         winner: existingWinner,
         queue: await getQueue(String(auction.id)),
         message: "Auction winner already paid"
+      });
+    }
+
+    const winnerBySig = await getWinnerBySignature(signature);
+    if (winnerBySig) {
+      return NextResponse.json({
+        ok: true,
+        auction,
+        winner: winnerBySig,
+        queue: await getQueue(String(auction.id)),
+        message: "Signature already used for this payment"
       });
     }
 
@@ -316,6 +363,68 @@ export async function POST(req: Request) {
       );
     }
 
+    const rpcUrl = process.env.SOLANA_RPC_URL;
+    if (!rpcUrl) {
+      return NextResponse.json({ error: "Server missing SOLANA_RPC_URL" }, { status: 500 });
+    }
+
+    const treasuryWallet = getTreasuryWallet();
+    const connection = new Connection(rpcUrl, "confirmed");
+
+    const tx = await connection.getTransaction(signature, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0
+    });
+
+    if (!tx || !tx.meta) {
+      return NextResponse.json(
+        { error: "Transaction not confirmed yet. Try again." },
+        { status: 400 }
+      );
+    }
+
+    const staticKeys = tx.transaction.message.getAccountKeys().staticAccountKeys;
+    const payer = staticKeys[0]?.toBase58();
+
+    if (!payer || payer !== wallet) {
+      return NextResponse.json(
+        { error: "Payer wallet mismatch" },
+        { status: 400 }
+      );
+    }
+
+    const treasuryKey = new PublicKey(treasuryWallet);
+    const treasuryIndex = staticKeys.findIndex((k) => k.equals(treasuryKey));
+
+    if (treasuryIndex === -1) {
+      return NextResponse.json(
+        { error: "Treasury wallet not involved in transaction" },
+        { status: 400 }
+      );
+    }
+
+    const preLamports = tx.meta.preBalances[treasuryIndex] ?? 0;
+    const postLamports = tx.meta.postBalances[treasuryIndex] ?? 0;
+    const deltaLamports = postLamports - preLamports;
+
+    const requiredLamports = Number(currentRow.amount_lamports) || 0;
+
+    if (!Number.isFinite(requiredLamports) || requiredLamports <= 0) {
+      return NextResponse.json(
+        { error: "Winning bid amount is invalid" },
+        { status: 400 }
+      );
+    }
+
+    if (deltaLamports < requiredLamports) {
+      return NextResponse.json(
+        {
+          error: `Winning payment too low. Received ${deltaLamports} lamports, expected at least ${requiredLamports}.`
+        },
+        { status: 400 }
+      );
+    }
+
     const paidAtIso = now.toISOString();
 
     const paidRow = await markQueueRowPaid(String(currentRow.id), paidAtIso);
@@ -325,7 +434,8 @@ export async function POST(req: Request) {
       entryId: String(paidRow.entry_id),
       bidId: String(paidRow.bid_id),
       amountLamports: Number(paidRow.amount_lamports) || 0,
-      paidAtIso
+      paidAtIso,
+      signature
     });
 
     const updatedAuction = await markAuctionCompleted(String(auction.id));
@@ -338,7 +448,8 @@ export async function POST(req: Request) {
       queue,
       payment: {
         paid: true,
-        paid_at: paidAtIso
+        paid_at: paidAtIso,
+        signature
       }
     });
   } catch (e: any) {
@@ -388,6 +499,7 @@ export async function GET(req: Request) {
       queue,
       me: myRow,
       payment: {
+        treasuryWallet: getTreasuryWallet(),
         is_my_turn: !!myRow && !!currentRow && String(myRow.id) === String(currentRow.id),
         can_pay:
           !!myRow &&
@@ -396,6 +508,14 @@ export async function GET(req: Request) {
           currentRow.status === "awaiting_payment" &&
           Number.isFinite(dueAtMs) &&
           now.getTime() <= dueAtMs,
+        amount_lamports:
+          !!myRow && !!currentRow && String(myRow.id) === String(currentRow.id)
+            ? Number(currentRow.amount_lamports) || 0
+            : null,
+        amount_sol:
+          !!myRow && !!currentRow && String(myRow.id) === String(currentRow.id)
+            ? (Number(currentRow.amount_lamports) || 0) / 1_000_000_000
+            : null,
         payment_due_at: currentRow?.payment_due_at ?? null,
         ms_remaining:
           Number.isFinite(dueAtMs) ? Math.max(0, dueAtMs - now.getTime()) : null
