@@ -47,6 +47,27 @@ type CoinMeta = {
 type NameMap = Record<string, string>; // wallet -> display_name
 type PfpMap = Record<string, string | null>; // wallet -> signed pfp url (or null)
 
+type GoldenHourAd = {
+  id: string;
+  dev_wallet: string;
+  coin_id: string;
+  banner_url: string | null;
+  starts_at: string;
+  ends_at: string;
+  target_date: string;
+  coin: {
+    id: string;
+    wallet: string;
+    token_address: string;
+    title: string | null;
+    description: string | null;
+  } | null;
+  profile: {
+    wallet: string;
+    display_name: string | null;
+  } | null;
+};
+
 function shortAddr(s: string) {
   if (!s) return "";
   return `${s.slice(0, 4)}…${s.slice(-4)}`;
@@ -136,8 +157,11 @@ export default function DashboardPage() {
       if (p?.wallet) s.add(String(p.wallet));
     }
 
+    // golden hour ad dev
+    if (data?.goldenHourAd?.dev_wallet) s.add(String(data.goldenHourAd.dev_wallet));
+
     return Array.from(s);
-  }, [data?.posts, trendingCoins, following?.posts, following?.coins, data?.profiles]);
+  }, [data?.posts, trendingCoins, following?.posts, following?.coins, data?.profiles, data?.goldenHourAd?.dev_wallet]);
 
   // Resolve missing display_names via /api/public/dev/:wallet (cached in state)
   useEffect(() => {
@@ -349,8 +373,12 @@ export default function DashboardPage() {
       .map((c) => c.token_address)
       .filter(Boolean);
 
+    if (data?.goldenHourAd?.coin?.token_address) {
+      t.push(data.goldenHourAd.coin.token_address);
+    }
+
     return Array.from(new Set([...t, ...f]));
-  }, [trendingCoins, following?.coins]);
+  }, [trendingCoins, following?.coins, data?.goldenHourAd?.coin?.token_address]);
 
   // Load logo/name/ticker for coins shown on dashboard
   useEffect(() => {
@@ -405,6 +433,17 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allMintsToHydrate.join("|")]);
 
+  const goldenHourAd = (data?.goldenHourAd ?? null) as GoldenHourAd | null;
+  const goldenHourDisplayName =
+    (goldenHourAd?.profile?.display_name?.trim() || "") ||
+    (goldenHourAd?.dev_wallet ? devLabel(goldenHourAd.dev_wallet) : "");
+  const goldenHourCoinName =
+    (goldenHourAd?.coin?.token_address ? metaByMint[goldenHourAd.coin.token_address]?.name : null) ||
+    goldenHourAd?.coin?.title ||
+    "Featured coin";
+  const goldenHourCoinSymbol =
+    (goldenHourAd?.coin?.token_address ? metaByMint[goldenHourAd.coin.token_address]?.symbol : null) || null;
+
   return (
     <main className="min-h-screen bg-authswap text-white">
       <TopNav />
@@ -412,6 +451,49 @@ export default function DashboardPage() {
       <div className="mx-auto max-w-5xl px-6 py-10">
         <h1 className="text-2xl font-semibold">Dashboard</h1>
         <p className="mt-1 text-sm text-zinc-400">Trending devs, your following feed, and trending coins.</p>
+
+        {/* ✅ GOLDEN HOUR BANNER */}
+        {goldenHourAd?.coin?.id && goldenHourAd?.banner_url ? (
+          <section className="mt-6">
+            <Link
+              href={`/coin/${encodeURIComponent(goldenHourAd.coin.id)}`}
+              className="block overflow-hidden rounded-2xl border border-yellow-400/20 bg-black/30 hover:bg-black/40 transition"
+            >
+              <div className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={goldenHourAd.banner_url}
+                  alt=""
+                  className="h-40 w-full object-cover sm:h-52"
+                />
+
+                <div className="absolute left-3 top-3 rounded-full border border-yellow-300/30 bg-black/60 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-yellow-200">
+                  Golden Hour
+                </div>
+
+                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-4 sm:p-5">
+                  <div className="flex flex-wrap items-end justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-lg font-semibold text-white sm:text-xl">{goldenHourCoinName}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-200 sm:text-sm">
+                        {goldenHourCoinSymbol ? (
+                          <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5">
+                            {goldenHourCoinSymbol}
+                          </span>
+                        ) : null}
+                        <span>by {goldenHourDisplayName}</span>
+                      </div>
+                    </div>
+
+                    <span className="shrink-0 rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black">
+                      Open coin →
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </Link>
+          </section>
+        ) : null}
 
         {/* FOLLOWING FEED */}
         <section className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-5">
@@ -454,10 +536,8 @@ export default function DashboardPage() {
 
                         <div className="mt-2 text-sm text-zinc-200">{x.content}</div>
 
-                        {/* ✅ show update image (if api provides x.image_url) */}
                         <PostImage url={x.image_url ?? null} />
 
-                        {/* ✅ NEW: show dev update poll (if api provides x.poll) */}
                         {x.poll ? <PollCard poll={x.poll as Poll} devWallet={x.wallet} /> : null}
                       </div>
                     ))
@@ -602,10 +682,8 @@ export default function DashboardPage() {
 
                       <div className="mt-2 text-sm text-zinc-200">{x.content}</div>
 
-                      {/* ✅ show update image (if api provides x.image_url) */}
                       <PostImage url={x.image_url ?? null} />
 
-                      {/* ✅ NEW: show dev update poll (if api provides x.poll) */}
                       {x.poll ? <PollCard poll={x.poll as Poll} devWallet={x.wallet} /> : null}
                     </div>
                   ))
