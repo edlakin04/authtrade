@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
+const GOLDEN_HOUR_BUCKET = "golden-hour";
 
 function expDecayWeight(ageHours: number, halfLifeHours = 6) {
   return Math.exp((-Math.LN2 * ageHours) / halfLifeHours);
@@ -65,6 +66,7 @@ export async function GET() {
     const sb = supabaseAdmin();
 
     const now = Date.now();
+    const nowIso = new Date(now).toISOString();
     const sinceFollows7d = new Date(now - 7 * DAY).toISOString();
     const sinceReviews14d = new Date(now - 14 * DAY).toISOString();
     const sinceReviews90d = new Date(now - 90 * DAY).toISOString();
@@ -217,6 +219,84 @@ export async function GET() {
       .sort((a, b) => (b.trending_score ?? 0) - (a.trending_score ?? 0))
       .slice(0, 12);
 
+    // --- Golden Hour active ad ---
+    let goldenHourAd: {
+      id: string;
+      dev_wallet: string;
+      coin_id: string;
+      banner_url: string | null;
+      starts_at: string;
+      ends_at: string;
+      target_date: string;
+      coin: {
+        id: string;
+        wallet: string;
+        token_address: string;
+        title: string | null;
+        description: string | null;
+      } | null;
+      profile: {
+        wallet: string;
+        display_name: string | null;
+      } | null;
+    } | null = null;
+
+    try {
+      const activeGoldenRes = await sb
+        .from("golden_hour_winners")
+        .select("id, target_date, dev_wallet, coin_id, banner_path, starts_at, ends_at")
+        .lte("starts_at", nowIso)
+        .gt("ends_at", nowIso)
+        .order("starts_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!activeGoldenRes.error && activeGoldenRes.data) {
+        const gh = activeGoldenRes.data as any;
+
+        const [{ data: coin }, { data: profile }, bannerRes] = await Promise.all([
+          sb
+            .from("coins")
+            .select("id, wallet, token_address, title, description")
+            .eq("id", gh.coin_id)
+            .maybeSingle(),
+          sb
+            .from("dev_profiles")
+            .select("wallet, display_name")
+            .eq("wallet", gh.dev_wallet)
+            .maybeSingle(),
+          sb.storage.from(GOLDEN_HOUR_BUCKET).createSignedUrl(String(gh.banner_path), 60 * 30)
+        ]);
+
+        goldenHourAd = {
+          id: String(gh.id),
+          dev_wallet: String(gh.dev_wallet),
+          coin_id: String(gh.coin_id),
+          banner_url: bannerRes.error ? null : bannerRes.data?.signedUrl ?? null,
+          starts_at: String(gh.starts_at),
+          ends_at: String(gh.ends_at),
+          target_date: String(gh.target_date),
+          coin: coin
+            ? {
+                id: String((coin as any).id),
+                wallet: String((coin as any).wallet),
+                token_address: String((coin as any).token_address),
+                title: (coin as any).title ?? null,
+                description: (coin as any).description ?? null
+              }
+            : null,
+          profile: profile
+            ? {
+                wallet: String((profile as any).wallet),
+                display_name: (profile as any).display_name ?? null
+              }
+            : null
+        };
+      }
+    } catch {
+      goldenHourAd = null;
+    }
+
     // --- Posts + coins ---
     // IMPORTANT: include poll_id so we can hydrate polls
     const postsRes = await sb
@@ -356,6 +436,7 @@ export async function GET() {
 
     return NextResponse.json({
       ok: true,
+      goldenHourAd,
       profiles: scoredProfiles,
       posts,
       coins: coinsRes.data ?? []
