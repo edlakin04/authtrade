@@ -223,6 +223,13 @@ type BuildBiddingEntryPaymentResponse = {
   tx_base64?: string;
   transaction?: string;
   transaction_base64?: string;
+  tx?: {
+    serialized_base64?: string;
+    blockhash?: string;
+    lastValidBlockHeight?: number;
+  };
+  error?: string;
+  details?: string;
 };
 
 const BANNER_MAX_BYTES = 15 * 1024 * 1024;
@@ -314,7 +321,6 @@ export default function DevProfilePage() {
   const [biddingAdCoinId, setBiddingAdCoinId] = useState<string>("");
   const [biddingAdBannerFile, setBiddingAdBannerFile] = useState<File | null>(null);
   const [biddingAdBannerErr, setBiddingAdBannerErr] = useState<string | null>(null);
-  const [biddingAdSubmitBusy, setBiddingAdSubmitBusy] = useState(false);
   const [biddingAdDeleteBusy, setBiddingAdDeleteBusy] = useState(false);
   const [biddingAdPayBusy, setBiddingAdPayBusy] = useState(false);
 
@@ -819,49 +825,66 @@ export default function DevProfilePage() {
     }
   }
 
-  async function payBiddingAdEntryFee(statusArg?: BiddingAdStatus | null) {
-    const currentStatus = statusArg ?? biddingAd;
+  async function submitBiddingAdEntry() {
+    setBiddingAdBannerErr(null);
 
-    if (!currentStatus?.entry) {
-      throw new Error("No bidding ad entry found to pay for.");
+    if (!biddingAdCoinId) {
+      setBiddingAdBannerErr("Choose one of your coins.");
+      return;
     }
 
-    if (currentStatus.payment?.entryConfirmed || currentStatus.entry.entry_payment_status === "paid") {
-      await refreshBiddingAd();
+    if (!biddingAdBannerFile) {
+      setBiddingAdBannerErr("Choose a banner.");
+      return;
+    }
+
+    if (!BIDDING_AD_BANNER_ALLOWED.has(biddingAdBannerFile.type)) {
+      setBiddingAdBannerErr("Invalid banner type. Allowed: JPG, PNG, WEBP.");
+      return;
+    }
+
+    if (biddingAdBannerFile.size <= 0) {
+      setBiddingAdBannerErr("Empty banner file.");
+      return;
+    }
+
+    if (biddingAdBannerFile.size > BIDDING_AD_BANNER_MAX_BYTES) {
+      setBiddingAdBannerErr("Banner too large (max 15MB).");
       return;
     }
 
     if (!connected || !publicKey) {
-      throw new Error("Connect the wallet you use for this dev profile first.");
+      setBiddingAdBannerErr("Connect the wallet you use for this dev profile first.");
+      return;
     }
 
     if (!sendTransaction) {
-      throw new Error("Wallet does not support sending transactions.");
+      setBiddingAdBannerErr("Wallet does not support sending transactions.");
+      return;
     }
 
     setBiddingAdPayBusy(true);
     try {
-      const buildRes = await fetch("/api/payments/create-bidding-entry", {
+      const buildRes = await fetch("/api/dev/bidding-ad/entry-payment-tx", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          target_date: currentStatus.targetDate
+          target_date: biddingAd?.targetDate
         })
       });
 
-      const buildJson = (await buildRes.json().catch(() => ({}))) as BuildBiddingEntryPaymentResponse & {
-        error?: string;
-      };
+      const buildJson = (await buildRes.json().catch(() => ({}))) as BuildBiddingEntryPaymentResponse;
 
       if (!buildRes.ok) {
-        throw new Error(buildJson?.error ?? "Failed to create entry payment transaction");
+        throw new Error(buildJson?.error || buildJson?.details || "Failed to create entry payment transaction");
       }
 
       const txBase64 =
-        buildJson.txBase64 ||
-        buildJson.tx_base64 ||
-        buildJson.transaction ||
-        buildJson.transaction_base64 ||
+        buildJson?.tx?.serialized_base64 ||
+        buildJson?.txBase64 ||
+        buildJson?.tx_base64 ||
+        buildJson?.transaction ||
+        buildJson?.transaction_base64 ||
         "";
 
       if (!txBase64) {
@@ -878,92 +901,37 @@ export default function DevProfilePage() {
 
       await connection.confirmTransaction(signature, "confirmed");
 
-      const confirmRes = await fetch("/api/payments/confirm-bidding-entry", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          signature,
-          target_date: currentStatus.targetDate
-        })
-      });
-
-      const confirmJson = await confirmRes.json().catch(() => ({}));
-      if (!confirmRes.ok) {
-        throw new Error(confirmJson?.error ?? "Entry payment confirmation failed");
-      }
-
-      await refreshBiddingAd();
-      window.location.href = `/ads/auction/${encodeURIComponent(currentStatus.targetDate)}`;
-    } finally {
-      setBiddingAdPayBusy(false);
-    }
-  }
-
-  async function submitBiddingAdEntry() {
-    setBiddingAdBannerErr(null);
-
-    if (!biddingAdCoinId) {
-      setBiddingAdBannerErr("Choose one of your coins.");
-      return;
-    }
-
-    const hasExistingBanner = !!biddingAd?.entry?.banner_path;
-
-    if (!biddingAdBannerFile && !hasExistingBanner) {
-      setBiddingAdBannerErr("Choose a banner.");
-      return;
-    }
-
-    if (biddingAdBannerFile) {
-      if (!BIDDING_AD_BANNER_ALLOWED.has(biddingAdBannerFile.type)) {
-        setBiddingAdBannerErr("Invalid banner type. Allowed: JPG, PNG, WEBP.");
-        return;
-      }
-
-      if (biddingAdBannerFile.size <= 0) {
-        setBiddingAdBannerErr("Empty banner file.");
-        return;
-      }
-
-      if (biddingAdBannerFile.size > BIDDING_AD_BANNER_MAX_BYTES) {
-        setBiddingAdBannerErr("Banner too large (max 15MB).");
-        return;
-      }
-    }
-
-    setBiddingAdSubmitBusy(true);
-    try {
       const fd = new FormData();
+      fd.append("signature", signature);
       fd.append("coin_id", biddingAdCoinId);
-      if (biddingAdBannerFile) fd.append("file", biddingAdBannerFile);
+      fd.append("file", biddingAdBannerFile);
+      if (biddingAd?.targetDate) {
+        fd.append("target_date", biddingAd.targetDate);
+      }
 
-      const res = await fetch("/api/dev/bidding-ad", {
+      const confirmRes = await fetch("/api/payments/confirm-bidding-entry", {
         method: "POST",
         body: fd
       });
 
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setBiddingAdBannerErr(json?.error ?? "Failed to save bidding ad entry");
-        return;
+      const confirmJson = await confirmRes.json().catch(() => ({}));
+      if (!confirmRes.ok) {
+        throw new Error(confirmJson?.error || confirmJson?.details || "Entry payment confirmation failed");
       }
 
-      const savedStatus = json as BiddingAdStatus;
-      setBiddingAd(savedStatus);
-
-      try {
-        await payBiddingAdEntryFee(savedStatus);
-      } catch (e: any) {
-        setBiddingAdBannerErr(e?.message ?? "Entry saved, but payment failed");
-        await refreshBiddingAd();
-        return;
-      }
-
+      await refreshBiddingAd();
       setBiddingAdEntryOpen(false);
       setBiddingAdBannerFile(null);
       setBiddingAdBannerErr(null);
+
+      const target = biddingAd?.targetDate || "";
+      if (target) {
+        window.location.href = `/ads/auction/${encodeURIComponent(target)}`;
+      }
+    } catch (e: any) {
+      setBiddingAdBannerErr(e?.message ?? "Failed to pay entry fee");
     } finally {
-      setBiddingAdSubmitBusy(false);
+      setBiddingAdPayBusy(false);
     }
   }
 
@@ -989,14 +957,6 @@ export default function DevProfilePage() {
       await refreshBiddingAd();
     } finally {
       setBiddingAdDeleteBusy(false);
-    }
-  }
-
-  async function resumeBiddingAdPayment() {
-    try {
-      await payBiddingAdEntryFee();
-    } catch (e: any) {
-      alert(e?.message ?? "Failed to pay entry fee");
     }
   }
 
@@ -1323,17 +1283,11 @@ export default function DevProfilePage() {
 
   const selectedBiddingAdCoin = biddingAd?.ownedCoins?.find((c) => c.id === biddingAdCoinId) ?? null;
 
-  const biddingAdCanEdit = biddingAdState === "can_enter" || biddingAdState === "entered";
-  const biddingAdHasDraftEntry = !!biddingAd?.entry && !biddingAd?.ui?.hasEntered;
+  const biddingAdCanEnter = biddingAdState === "can_enter";
+  const biddingAdHasEntered = !!biddingAd?.ui?.hasEntered;
   const biddingAdPaymentPending =
     !!biddingAd?.entry &&
     (biddingAd?.payment?.entryPending === true || biddingAd.entry.entry_payment_status === "pending");
-
-  const biddingAdCanSave =
-    biddingAdCanEdit &&
-    !!biddingAdCoinId &&
-    (!!biddingAdBannerFile || !!biddingAd?.entry?.banner_path) &&
-    !biddingAdBannerErr;
 
   function formatGoldenHourDate(iso?: string | null) {
     if (!iso) return "—";
@@ -1369,11 +1323,11 @@ export default function DevProfilePage() {
     if (!biddingAd) return "Loading Bidding Ad…";
 
     if (biddingAdPaymentPending) {
-      return "Your banner and coin are saved. Pay the entry fee to fully join the auction.";
+      return "Payment is still pending. Complete payment to join the auction.";
     }
 
     if (biddingAdState === "can_enter") {
-      return "Entry is open. Choose your coin, upload your banner, and pay the entry fee to join the auction.";
+      return "Entry is open. Choose your coin, upload your banner, then pay the entry fee to join the auction.";
     }
 
     if (biddingAdState === "entered") {
@@ -1597,36 +1551,25 @@ export default function DevProfilePage() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              {biddingAd?.ui?.hasEntered ? (
+              {biddingAdHasEntered ? (
                 <Link
-                  href={`/ads/auction/${encodeURIComponent(biddingAd.targetDate)}`}
+                  href={`/ads/auction/${encodeURIComponent(biddingAd?.targetDate ?? "")}`}
                   className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200"
                 >
                   Go to auction
                 </Link>
               ) : null}
 
-              {biddingAdPaymentPending ? (
-                <button
-                  type="button"
-                  onClick={resumeBiddingAdPayment}
-                  disabled={biddingAdPayBusy}
-                  className="rounded-xl bg-cyan-300 px-4 py-2 text-sm font-semibold text-black hover:bg-cyan-200 disabled:opacity-60"
-                >
-                  {biddingAdPayBusy ? "Paying…" : `Pay ${biddingAd?.pricing?.entryFeeSol ?? 1} SOL`}
-                </button>
-              ) : null}
-
               <button
                 type="button"
                 onClick={() => setBiddingAdEntryOpen(true)}
-                disabled={biddingAdLoading || !biddingAdCanEdit}
+                disabled={biddingAdLoading || !biddingAdCanEnter}
                 className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-60"
               >
-                {biddingAdLoading ? "Loading…" : biddingAdCanEdit ? "Enter Bidding Ad" : "Bidding Ad"}
+                {biddingAdLoading ? "Loading…" : biddingAdCanEnter ? "Enter Bidding Ad" : "Bidding Ad"}
               </button>
 
-              {biddingAd?.entry && biddingAdCanEdit ? (
+              {biddingAdHasEntered ? (
                 <button
                   type="button"
                   onClick={removeBiddingAdEntry}
@@ -1668,9 +1611,7 @@ export default function DevProfilePage() {
 
                 {biddingAd?.entry ? (
                   <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3">
-                    <div className="text-xs font-semibold text-zinc-200">
-                      {biddingAdHasDraftEntry ? "Saved draft" : "Current entry"}
-                    </div>
+                    <div className="text-xs font-semibold text-zinc-200">Current entry</div>
                     <div className="mt-2 text-sm text-zinc-300">
                       Coin: <span className="font-semibold text-zinc-100">{biddingAdEntryCoin || "Selected coin"}</span>
                     </div>
@@ -1895,7 +1836,7 @@ export default function DevProfilePage() {
                   <select
                     value={biddingAdCoinId}
                     onChange={(e) => setBiddingAdCoinId(e.target.value)}
-                    disabled={biddingAdSubmitBusy || biddingAdPayBusy}
+                    disabled={biddingAdPayBusy}
                     className="mt-2 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
                   >
                     <option value="">Choose one of your coins</option>
@@ -1960,8 +1901,6 @@ export default function DevProfilePage() {
                       <span className="text-xs text-zinc-400">
                         {biddingAdBannerFile.name} • {(biddingAdBannerFile.size / (1024 * 1024)).toFixed(2)}MB
                       </span>
-                    ) : biddingAd?.entry?.banner_path ? (
-                      <span className="text-xs text-zinc-500">Using your saved banner unless you choose a new one.</span>
                     ) : (
                       <span className="text-xs text-zinc-500">No banner selected.</span>
                     )}
@@ -1979,37 +1918,26 @@ export default function DevProfilePage() {
                 <button
                   type="button"
                   onClick={removeBiddingAdEntry}
-                  disabled={!biddingAd?.entry || biddingAdDeleteBusy || biddingAdSubmitBusy || biddingAdPayBusy}
+                  disabled={!biddingAdHasEntered || biddingAdDeleteBusy || biddingAdPayBusy}
                   className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-60"
                 >
                   {biddingAdDeleteBusy ? "Removing…" : "Remove entry"}
                 </button>
 
-                <div className="flex flex-wrap gap-2">
-                  {biddingAdPaymentPending ? (
-                    <button
-                      type="button"
-                      onClick={resumeBiddingAdPayment}
-                      disabled={biddingAdSubmitBusy || biddingAdPayBusy}
-                      className="rounded-xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-300/20 disabled:opacity-60"
-                    >
-                      {biddingAdPayBusy ? "Paying…" : `Pay ${biddingAd?.pricing?.entryFeeSol ?? 1} SOL`}
-                    </button>
-                  ) : null}
-
-                  <button
-                    type="button"
-                    onClick={submitBiddingAdEntry}
-                    disabled={biddingAdSubmitBusy || biddingAdPayBusy || !biddingAdCanSave}
-                    className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
-                  >
-                    {biddingAdSubmitBusy
-                      ? "Saving…"
-                      : biddingAd?.ui?.hasEntered
-                        ? "Update entry"
-                        : `Pay ${biddingAd?.pricing?.entryFeeSol ?? 1} SOL`}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={submitBiddingAdEntry}
+                  disabled={
+                    biddingAdPayBusy ||
+                    !biddingAdCanEnter ||
+                    !biddingAdCoinId ||
+                    !biddingAdBannerFile ||
+                    !!biddingAdBannerErr
+                  }
+                  className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+                >
+                  {biddingAdPayBusy ? "Paying…" : `Pay ${biddingAd?.pricing?.entryFeeSol ?? 1} SOL`}
+                </button>
               </div>
             </div>
           </div>
