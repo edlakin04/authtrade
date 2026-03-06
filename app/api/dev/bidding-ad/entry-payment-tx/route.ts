@@ -1,4 +1,3 @@
-// app/api/dev/bidding-ad/entry-payment-tx/route.ts
 import { NextResponse } from "next/server";
 import {
   Connection,
@@ -40,10 +39,10 @@ function scheduleForTargetDate(targetDate: string) {
     Date.UTC(prevDay.getUTCFullYear(), prevDay.getUTCMonth(), prevDay.getUTCDate(), 23, 0, 0, 0)
   );
   const auctionStartsAt = new Date(
-    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 11, 0, 0, 0)
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 21, 0, 0, 0)
   );
   const auctionEndsAt = new Date(
-    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 12, 0, 0, 0)
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 22, 0, 0, 0)
   );
 
   return {
@@ -81,6 +80,10 @@ function getEntryFeeLamports() {
   return Math.round(getEntryFeeSol() * 1_000_000_000);
 }
 
+function safeTrim(v: unknown) {
+  return typeof v === "string" ? v.trim() : "";
+}
+
 async function getViewerWallet() {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
@@ -98,6 +101,7 @@ async function requireDev(wallet: string) {
 
   const { data: user } = await sb.from("users").select("role").eq("wallet", wallet).maybeSingle<RoleRow>();
   const role = (user?.role ?? null) as string | null;
+
   return role === "dev" || role === "admin";
 }
 
@@ -148,7 +152,21 @@ async function getOrCreateAuction(targetDate: string) {
   return insertRes.data;
 }
 
-async function getEntry(wallet: string, targetDate: string) {
+async function getOwnedCoin(wallet: string, coinId: string) {
+  const sb = supabaseAdmin();
+
+  const { data, error } = await sb
+    .from("coins")
+    .select("id, wallet, token_address, title")
+    .eq("id", coinId)
+    .eq("wallet", wallet)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  return data ?? null;
+}
+
+async function getExistingEntry(wallet: string, targetDate: string) {
   const sb = supabaseAdmin();
 
   const { data, error } = await sb
@@ -175,19 +193,25 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Not a dev" }, { status: 403 });
     }
 
-    const body = await req.json().catch(() => null);
-    const targetDate = ((body?.target_date as string | undefined)?.trim() || currentTargetDate());
+    const form = await req.formData().catch(() => null);
+    if (!form) {
+      return NextResponse.json({ error: "Invalid form data" }, { status: 400 });
+    }
+
+    const targetDate = safeTrim(form.get("target_date")) || currentTargetDate();
+    const coinId = safeTrim(form.get("coin_id"));
+    const fileEntry = form.get("file");
+    const bannerFile = fileEntry instanceof File ? fileEntry : null;
+
+    if (!coinId) {
+      return NextResponse.json({ error: "coin_id is required" }, { status: 400 });
+    }
+
+    if (!bannerFile) {
+      return NextResponse.json({ error: "A banner file is required" }, { status: 400 });
+    }
 
     const auction = await getOrCreateAuction(targetDate);
-    const entry = await getEntry(wallet, targetDate);
-
-    if (!entry) {
-      return NextResponse.json({ error: "No bidding ad entry found for this target date" }, { status: 404 });
-    }
-
-    if (entry.entry_payment_status === "paid") {
-      return NextResponse.json({ error: "Entry fee already paid" }, { status: 400 });
-    }
 
     const now = new Date();
     const entryOpensAt = new Date(String(auction.entry_opens_at));
@@ -201,6 +225,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Bidding Ad entry is closed for that day" }, { status: 400 });
     }
 
+    const coin = await getOwnedCoin(wallet, coinId);
+    if (!coin) {
+      return NextResponse.json({ error: "Selected coin not found" }, { status: 400 });
+    }
+
+    const existingEntry = await getExistingEntry(wallet, targetDate);
+    if (existingEntry?.entry_payment_status === "paid") {
+      return NextResponse.json({ error: "Entry fee already paid for this target date" }, { status: 400 });
+    }
+
     const rpcUrl = process.env.SOLANA_RPC_URL;
     if (!rpcUrl) {
       return NextResponse.json({ error: "Server missing SOLANA_RPC_URL" }, { status: 500 });
@@ -210,16 +244,7 @@ export async function POST(req: Request) {
     const lamports = getEntryFeeLamports();
 
     const connection = new Connection(rpcUrl, "confirmed");
-   let blockhash: string;
-   let lastValidBlockHeight: number;
-
-   try {
-     const latest = await connection.getLatestBlockhash("confirmed");
-     blockhash = latest.blockhash;
-     lastValidBlockHeight = latest.lastValidBlockHeight;
-   } catch (e: any) {
-     throw new Error(`RPC getLatestBlockhash failed: ${e?.message ?? String(e)}`);
-   }
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
 
     const fromPubkey = new PublicKey(wallet);
     const toPubkey = new PublicKey(treasuryWallet);
@@ -243,10 +268,13 @@ export async function POST(req: Request) {
     return NextResponse.json({
       ok: true,
       targetDate,
-      entry: {
-        id: String(entry.id),
-        target_date: String(entry.target_date),
-        entry_payment_status: entry.entry_payment_status
+      preview: {
+        coin_id: String(coin.id),
+        coin_title: coin.title ?? null,
+        token_address: coin.token_address ?? null,
+        banner_name: bannerFile.name,
+        banner_type: bannerFile.type || null,
+        banner_size: bannerFile.size
       },
       payment: {
         treasuryWallet,
