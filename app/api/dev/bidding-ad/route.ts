@@ -163,7 +163,7 @@ async function getOrCreateAuction(targetDate: string) {
   if (existing.error) throw new Error(existing.error.message);
   if (existing.data) return existing.data;
 
-  const schedule = biddingAdScheduleForTargetDate(targetDate);
+  const schedule = scheduleForTargetDate(targetDate);
 
   const created = await sb
     .from("bidding_ad_auctions")
