@@ -880,11 +880,11 @@ export default function DevProfilePage() {
       }
 
       const txBase64 =
-        buildJson?.tx?.serialized_base64 ||
-        buildJson?.txBase64 ||
-        buildJson?.tx_base64 ||
-        buildJson?.transaction ||
-        buildJson?.transaction_base64 ||
+        buildJson.tx?.serialized_base64 ||
+        buildJson.txBase64 ||
+        buildJson.tx_base64 ||
+        buildJson.transaction ||
+        buildJson.transaction_base64 ||
         "";
 
       if (!txBase64) {
@@ -895,27 +895,44 @@ export default function DevProfilePage() {
       const tx = Transaction.from(txBytes);
 
       const signature = await sendTransaction(tx, connection, {
-  skipPreflight: false,
-  preflightCommitment: "confirmed"
-});
+        skipPreflight: false,
+        preflightCommitment: "confirmed"
+      });
 
-const confirmFd = new FormData();
-confirmFd.append("signature", signature);
-confirmFd.append("coin_id", biddingAdCoinId);
-confirmFd.append("file", biddingAdBannerFile);
-if (biddingAd?.targetDate) {
-  confirmFd.append("target_date", biddingAd.targetDate);
-}
+      try {
+        if (buildJson.tx?.blockhash && typeof buildJson.tx?.lastValidBlockHeight === "number") {
+          await connection.confirmTransaction(
+            {
+              signature,
+              blockhash: buildJson.tx.blockhash,
+              lastValidBlockHeight: buildJson.tx.lastValidBlockHeight
+            },
+            "confirmed"
+          );
+        } else {
+          await connection.confirmTransaction(signature, "confirmed");
+        }
+      } catch {
+        // Let the backend do the final on-chain verification using the signature.
+      }
 
-const confirmRes = await fetch("/api/payments/confirm-bidding-entry", {
-  method: "POST",
-  body: confirmFd
-});
+      const confirmFd = new FormData();
+      confirmFd.append("signature", signature);
+      confirmFd.append("coin_id", biddingAdCoinId);
+      confirmFd.append("file", biddingAdBannerFile);
+      if (biddingAd?.targetDate) {
+        confirmFd.append("target_date", biddingAd.targetDate);
+      }
 
-const confirmJson = await confirmRes.json().catch(() => ({}));
-if (!confirmRes.ok) {
-  throw new Error(confirmJson?.error || confirmJson?.details || "Entry payment confirmation failed");
-}
+      const confirmRes = await fetch("/api/payments/confirm-bidding-entry", {
+        method: "POST",
+        body: confirmFd
+      });
+
+      const confirmJson = await confirmRes.json().catch(() => ({}));
+      if (!confirmRes.ok) {
+        throw new Error(confirmJson?.error || confirmJson?.details || "Entry payment confirmation failed");
+      }
 
       await refreshBiddingAd();
       setBiddingAdEntryOpen(false);
