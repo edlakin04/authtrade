@@ -1,3 +1,4 @@
+// app/api/dev/bidding-ad/route.ts
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
@@ -12,7 +13,6 @@ type ReviewAgg = { count: number; avg: number | null };
 const BIDDING_AD_BANNER_BUCKET = "bidding-ad-banners";
 const MAX_BANNER_BYTES = 15 * 1024 * 1024;
 const ALLOWED_BANNER_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
-const ONE_SOL_LAMPORTS = 1_000_000_000;
 
 function startOfUtcDay(d: Date) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
@@ -26,8 +26,14 @@ function toDateOnlyUtc(d: Date) {
   return d.toISOString().slice(0, 10);
 }
 
+function currentTargetDate(now = new Date()) {
+  const todayUtc = startOfUtcDay(now);
+  return toDateOnlyUtc(addUtcDays(todayUtc, 1));
+}
+
 function safeTrim(v: FormDataEntryValue | null) {
-  return typeof v === "string" ? v.trim() : "";
+  if (typeof v !== "string") return "";
+  return v.trim();
 }
 
 function extFromType(type: string) {
@@ -35,11 +41,6 @@ function extFromType(type: string) {
   if (type === "image/png") return "png";
   if (type === "image/webp") return "webp";
   return "bin";
-}
-
-function currentTargetDate(now = new Date()) {
-  const todayUtc = startOfUtcDay(now);
-  return toDateOnlyUtc(todayUtc);
 }
 
 function getTreasuryWallet() {
@@ -56,8 +57,8 @@ function getTreasuryWallet() {
 }
 
 function getEntryFeeSol() {
-  const raw = process.env.BIDDING_AD_ENTRY_FEE_SOL ?? "1";
-  const sol = Number(raw);
+  const solRaw = process.env.BIDDING_AD_ENTRY_FEE_SOL ?? "1";
+  const sol = Number(solRaw);
 
   if (!Number.isFinite(sol) || sol <= 0) {
     throw new Error("Invalid BIDDING_AD_ENTRY_FEE_SOL env value");
@@ -67,16 +68,9 @@ function getEntryFeeSol() {
 }
 
 function getEntryFeeLamports() {
-  return Math.round(getEntryFeeSol() * ONE_SOL_LAMPORTS);
+  return Math.round(getEntryFeeSol() * 1_000_000_000);
 }
 
-/**
- * FINAL SHARED SCHEDULE
- * - targetDate = day the ad will run
- * - entry opens previous UTC day at 23:00
- * - auction starts targetDate at 11:00 UTC
- * - auction ends targetDate at 12:00 UTC
- */
 function scheduleForTargetDate(targetDate: string) {
   const day = new Date(`${targetDate}T00:00:00.000Z`);
   const prevDay = addUtcDays(day, -1);
@@ -85,10 +79,10 @@ function scheduleForTargetDate(targetDate: string) {
     Date.UTC(prevDay.getUTCFullYear(), prevDay.getUTCMonth(), prevDay.getUTCDate(), 23, 0, 0, 0)
   );
   const auctionStartsAt = new Date(
-    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 19, 20, 0, 0)
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 11, 0, 0, 0)
   );
   const auctionEndsAt = new Date(
-    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 20, 20, 0, 0)
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 12, 0, 0, 0)
   );
 
   return {
@@ -114,7 +108,8 @@ async function requireDev(wallet: string) {
   if (!prof.error && prof.data?.wallet) return true;
 
   const { data: user } = await sb.from("users").select("role").eq("wallet", wallet).maybeSingle<RoleRow>();
-  return user?.role === "dev" || user?.role === "admin";
+  const role = (user?.role ?? null) as string | null;
+  return role === "dev" || role === "admin";
 }
 
 async function getOwnedCoins(wallet: string) {
@@ -134,15 +129,17 @@ async function getReviewAgg(wallet: string): Promise<ReviewAgg> {
   const sb = supabaseAdmin();
 
   const { data, error } = await sb.from("dev_reviews").select("rating").eq("dev_wallet", wallet);
+
   if (error) return { count: 0, avg: null };
 
-  const ratings = (data ?? [])
-    .map((row: any) => Number(row.rating))
-    .filter((n) => Number.isFinite(n));
+  const rows = data ?? [];
+  if (!rows.length) return { count: 0, avg: null };
 
+  const ratings = rows.map((r: any) => Number(r.rating)).filter((n) => Number.isFinite(n));
   if (!ratings.length) return { count: 0, avg: null };
 
   const sum = ratings.reduce((a, b) => a + b, 0);
+
   return {
     count: ratings.length,
     avg: sum / ratings.length
@@ -152,7 +149,7 @@ async function getReviewAgg(wallet: string): Promise<ReviewAgg> {
 async function getOrCreateAuction(targetDate: string) {
   const sb = supabaseAdmin();
 
-  const existing = await sb
+  const existingRes = await sb
     .from("bidding_ad_auctions")
     .select(
       "id, target_date, entry_opens_at, auction_starts_at, auction_ends_at, status, highest_bid_lamports, highest_bidder_wallet, highest_bid_entry_id, last_bid_at, bid_count, created_at, updated_at"
@@ -160,12 +157,12 @@ async function getOrCreateAuction(targetDate: string) {
     .eq("target_date", targetDate)
     .maybeSingle();
 
-  if (existing.error) throw new Error(existing.error.message);
-  if (existing.data) return existing.data;
+  if (existingRes.error) throw new Error(existingRes.error.message);
+  if (existingRes.data) return existingRes.data;
 
   const schedule = scheduleForTargetDate(targetDate);
 
-  const created = await sb
+  const insertRes = await sb
     .from("bidding_ad_auctions")
     .insert({
       target_date: targetDate,
@@ -179,49 +176,21 @@ async function getOrCreateAuction(targetDate: string) {
     )
     .single();
 
-  if (!created.error) return created.data;
+  if (insertRes.error) {
+    const retryRes = await sb
+      .from("bidding_ad_auctions")
+      .select(
+        "id, target_date, entry_opens_at, auction_starts_at, auction_ends_at, status, highest_bid_lamports, highest_bidder_wallet, highest_bid_entry_id, last_bid_at, bid_count, created_at, updated_at"
+      )
+      .eq("target_date", targetDate)
+      .maybeSingle();
 
-  const retry = await sb
-    .from("bidding_ad_auctions")
-    .select(
-      "id, target_date, entry_opens_at, auction_starts_at, auction_ends_at, status, highest_bid_lamports, highest_bidder_wallet, highest_bid_entry_id, last_bid_at, bid_count, created_at, updated_at"
-    )
-    .eq("target_date", targetDate)
-    .maybeSingle();
-
-  if (retry.error) throw new Error(retry.error.message);
-  if (!retry.data) throw new Error(created.error.message);
-
-  return retry.data;
-}
-
-async function refreshAuctionState(auction: any) {
-  const sb = supabaseAdmin();
-  const now = Date.now();
-  const startMs = Date.parse(String(auction.auction_starts_at));
-  const endMs = Date.parse(String(auction.auction_ends_at));
-
-  let nextStatus = String(auction.status);
-
-  if ((nextStatus === "scheduled" || nextStatus === "cancelled") && now >= startMs && now < endMs) {
-    nextStatus = "live";
-  } else if ((nextStatus === "scheduled" || nextStatus === "live") && now >= endMs) {
-    nextStatus = "awaiting_payment";
+    if (retryRes.error) throw new Error(retryRes.error.message);
+    if (!retryRes.data) throw new Error(insertRes.error.message);
+    return retryRes.data;
   }
 
-  if (nextStatus === auction.status) return auction;
-
-  const { data, error } = await sb
-    .from("bidding_ad_auctions")
-    .update({ status: nextStatus })
-    .eq("id", auction.id)
-    .select(
-      "id, target_date, entry_opens_at, auction_starts_at, auction_ends_at, status, highest_bid_lamports, highest_bidder_wallet, highest_bid_entry_id, last_bid_at, bid_count, created_at, updated_at"
-    )
-    .single();
-
-  if (error) throw new Error(error.message);
-  return data;
+  return insertRes.data;
 }
 
 async function getEntry(wallet: string, targetDate: string) {
@@ -267,33 +236,32 @@ function buildStatus(params: {
 }) {
   const now = params.now ?? new Date();
 
-  const entryOpensAtMs = Date.parse(String(params.auction.entry_opens_at));
-  const auctionStartsAtMs = Date.parse(String(params.auction.auction_starts_at));
-  const auctionEndsAtMs = Date.parse(String(params.auction.auction_ends_at));
-  const nowMs = now.getTime();
+  const entryOpensAt = new Date(params.auction.entry_opens_at);
+  const auctionStartsAt = new Date(params.auction.auction_starts_at);
+  const auctionEndsAt = new Date(params.auction.auction_ends_at);
 
-  const entryOpen = nowMs >= entryOpensAtMs && nowMs < auctionStartsAtMs;
-  const auctionLive = nowMs >= auctionStartsAtMs && nowMs < auctionEndsAtMs;
-  const auctionClosed = nowMs >= auctionEndsAtMs;
+  const isEligible = true;
+  const entryOpen = now >= entryOpensAt && now < auctionStartsAt;
+  const auctionLive = now >= auctionStartsAt && now < auctionEndsAt;
+  const auctionClosed = now >= auctionEndsAt;
 
-  const hasEntered = !!params.entry;
-  const iWon = !!params.winner && String(params.winner.dev_wallet) === params.wallet;
-  const iLost = !!params.winner && String(params.winner.dev_wallet) !== params.wallet;
+  const entryPaid = params.entry?.entry_payment_status === "paid";
+  const hasEntered = !!params.entry && entryPaid;
+  const hasDraftEntry = !!params.entry;
+  const iWon = !!params.winner && params.winner.dev_wallet === params.wallet;
 
-  let state: "can_enter" | "entered" | "auction_live" | "won" | "lost" | "closed" = "closed";
+  let state: "can_enter" | "entered" | "auction_live" | "won" | "lost" | "closed" = "can_enter";
 
   if (iWon) {
     state = "won";
-  } else if (iLost) {
-    state = "lost";
   } else if (auctionLive && hasEntered) {
     state = "auction_live";
-  } else if (entryOpen && hasEntered) {
+  } else if (hasEntered && !auctionLive && !auctionClosed) {
     state = "entered";
-  } else if (entryOpen && !hasEntered) {
-    state = "can_enter";
-  } else {
+  } else if (auctionClosed) {
     state = "closed";
+  } else {
+    state = "can_enter";
   }
 
   return {
@@ -310,7 +278,7 @@ function buildStatus(params: {
       treasuryWallet: getTreasuryWallet()
     },
     eligibility: {
-      isEligible: true,
+      isEligible,
       avgRating: params.reviewAgg.avg,
       reviewCount: params.reviewAgg.count
     },
@@ -319,6 +287,7 @@ function buildStatus(params: {
       auctionLive,
       auctionClosed,
       hasEntered,
+      hasDraftEntry,
       iWon,
       state
     },
@@ -330,7 +299,8 @@ function buildStatus(params: {
       treasuryWallet: getTreasuryWallet(),
       entryFeeSol: getEntryFeeSol(),
       entryFeeLamports: getEntryFeeLamports(),
-      entryConfirmed: params.entry?.entry_payment_status === "paid"
+      entryConfirmed: entryPaid,
+      entryPending: !!params.entry && !entryPaid
     }
   };
 }
@@ -351,14 +321,16 @@ async function uploadBiddingAdBanner(wallet: string, targetDate: string, coinId:
   const sb = supabaseAdmin();
   const ext = extFromType(file.type);
   const path = `${wallet}/${targetDate}/${coinId}/banner.${ext}`;
+
   const buf = Buffer.from(await file.arrayBuffer());
 
-  const uploaded = await sb.storage.from(BIDDING_AD_BANNER_BUCKET).upload(path, buf, {
+  const uploadRes = await sb.storage.from(BIDDING_AD_BANNER_BUCKET).upload(path, buf, {
     contentType: file.type,
     upsert: true
   });
 
-  if (uploaded.error) throw new Error(uploaded.error.message);
+  if (uploadRes.error) throw new Error(uploadRes.error.message);
+
   return path;
 }
 
@@ -376,12 +348,10 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const targetDate = (url.searchParams.get("target_date") || currentTargetDate()).trim();
 
-    let auction = await getOrCreateAuction(targetDate);
-    auction = await refreshAuctionState(auction);
-
-    const [reviewAgg, ownedCoins, entry, winner] = await Promise.all([
+    const [reviewAgg, ownedCoins, auction, entry, winner] = await Promise.all([
       getReviewAgg(wallet),
       getOwnedCoins(wallet),
+      getOrCreateAuction(targetDate),
       getEntry(wallet, targetDate),
       getWinner(targetDate)
     ]);
@@ -430,28 +400,27 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "coin_id is required" }, { status: 400 });
     }
 
-    const sb = supabaseAdmin();
+    const now = new Date();
 
-    const [reviewAgg, ownedCoins, existingEntry] = await Promise.all([
+    const [reviewAgg, ownedCoins, auction, existingEntry] = await Promise.all([
       getReviewAgg(wallet),
       getOwnedCoins(wallet),
+      getOrCreateAuction(targetDate),
       getEntry(wallet, targetDate)
     ]);
 
-    let auction = await getOrCreateAuction(targetDate);
-    auction = await refreshAuctionState(auction);
+    const entryOpensAt = new Date(auction.entry_opens_at);
+    const auctionStartsAt = new Date(auction.auction_starts_at);
 
-    const entryOpensAtMs = Date.parse(String(auction.entry_opens_at));
-    const auctionStartsAtMs = Date.parse(String(auction.auction_starts_at));
-    const nowMs = Date.now();
-
-    if (nowMs < entryOpensAtMs) {
+    if (now < entryOpensAt) {
       return NextResponse.json({ error: "Bidding Ad entry is not open yet" }, { status: 400 });
     }
 
-    if (nowMs >= auctionStartsAtMs) {
+    if (now >= auctionStartsAt) {
       return NextResponse.json({ error: "Bidding Ad entry is closed for that day" }, { status: 400 });
     }
+
+    const sb = supabaseAdmin();
 
     const coinRes = await sb
       .from("coins")
@@ -490,7 +459,7 @@ export async function POST(req: Request) {
       entry_payment_status: existingEntry?.entry_payment_status === "paid" ? "paid" : "pending"
     };
 
-    const upserted = await sb
+    const upsertRes = await sb
       .from("bidding_ad_entries")
       .upsert(payload, { onConflict: "target_date,dev_wallet" })
       .select(
@@ -498,8 +467,8 @@ export async function POST(req: Request) {
       )
       .single();
 
-    if (upserted.error) {
-      return NextResponse.json({ error: upserted.error.message }, { status: 500 });
+    if (upsertRes.error) {
+      return NextResponse.json({ error: upsertRes.error.message }, { status: 500 });
     }
 
     const winner = await getWinner(targetDate);
@@ -509,17 +478,18 @@ export async function POST(req: Request) {
         wallet,
         targetDate,
         auction,
-        entry: upserted.data,
+        entry: upsertRes.data,
         winner,
         ownedCoins,
         reviewAgg
       }),
-      paymentRequired: upserted.data.entry_payment_status !== "paid",
+      paymentRequired: upsertRes.data.entry_payment_status !== "paid",
       payment: {
         treasuryWallet: getTreasuryWallet(),
         entryFeeSol: getEntryFeeSol(),
         entryFeeLamports: getEntryFeeLamports(),
-        entryConfirmed: upserted.data.entry_payment_status === "paid",
+        entryConfirmed: upsertRes.data.entry_payment_status === "paid",
+        entryPending: upsertRes.data.entry_payment_status !== "paid",
         kind: "bidding_ad_entry"
       }
     });
@@ -545,24 +515,23 @@ export async function DELETE(req: Request) {
     const url = new URL(req.url);
     const targetDate = (url.searchParams.get("target_date") || currentTargetDate()).trim();
 
-    const [reviewAgg, ownedCoins, existingEntry] = await Promise.all([
+    const now = new Date();
+
+    const [reviewAgg, ownedCoins, auction, existingEntry] = await Promise.all([
       getReviewAgg(wallet),
       getOwnedCoins(wallet),
+      getOrCreateAuction(targetDate),
       getEntry(wallet, targetDate)
     ]);
 
-    let auction = await getOrCreateAuction(targetDate);
-    auction = await refreshAuctionState(auction);
+    const entryOpensAt = new Date(auction.entry_opens_at);
+    const auctionStartsAt = new Date(auction.auction_starts_at);
 
-    const entryOpensAtMs = Date.parse(String(auction.entry_opens_at));
-    const auctionStartsAtMs = Date.parse(String(auction.auction_starts_at));
-    const nowMs = Date.now();
-
-    if (nowMs < entryOpensAtMs) {
+    if (now < entryOpensAt) {
       return NextResponse.json({ error: "Bidding Ad entry is not open yet" }, { status: 400 });
     }
 
-    if (nowMs >= auctionStartsAtMs) {
+    if (now >= auctionStartsAt) {
       return NextResponse.json({ error: "Bidding Ad entry can no longer be removed" }, { status: 400 });
     }
 
@@ -574,20 +543,18 @@ export async function DELETE(req: Request) {
     }
 
     const sb = supabaseAdmin();
-    const deleted = await sb
+
+    const delRes = await sb
       .from("bidding_ad_entries")
       .delete()
       .eq("dev_wallet", wallet)
       .eq("target_date", targetDate);
 
-    if (deleted.error) {
-      return NextResponse.json({ error: deleted.error.message }, { status: 500 });
+    if (delRes.error) {
+      return NextResponse.json({ error: delRes.error.message }, { status: 500 });
     }
 
-    const [entryAfterDelete, winner] = await Promise.all([
-      getEntry(wallet, targetDate),
-      getWinner(targetDate)
-    ]);
+    const [entryAfterDelete, winner] = await Promise.all([getEntry(wallet, targetDate), getWinner(targetDate)]);
 
     return NextResponse.json(
       buildStatus({
