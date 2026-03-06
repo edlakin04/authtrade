@@ -7,7 +7,8 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const ONE_SOL_LAMPORTS = 1_000_000_000;
-const MIN_BID_INCREMENT_LAMPORTS = 10_000_000;
+const MIN_START_BID_LAMPORTS = 10_000_000; // 0.01 SOL
+const MIN_BID_INCREMENT_LAMPORTS = 10_000_000; // 0.01 SOL
 const EXTENSION_WINDOW_MS = 30 * 1000;
 const MAX_EXTENSION_FROM_SCHEDULED_END_MS = 60 * 60 * 1000;
 
@@ -196,8 +197,9 @@ async function getAuctionWinner(auctionId: string) {
 }
 
 function nextMinimumBidLamports(auction: any) {
-  if (auction.highest_bid_lamports == null) return ONE_SOL_LAMPORTS;
-  return (Number(auction.highest_bid_lamports) || 0) + MIN_BID_INCREMENT_LAMPORTS;
+  const currentHighest = Number(auction.highest_bid_lamports ?? 0);
+  if (currentHighest <= 0) return MIN_START_BID_LAMPORTS;
+  return currentHighest + MIN_BID_INCREMENT_LAMPORTS;
 }
 
 function buildResponse(params: {
@@ -222,6 +224,10 @@ function buildResponse(params: {
       auction_closed: nowMs >= endMs,
       next_min_bid_lamports: nextMin,
       next_min_bid_sol: nextMin / ONE_SOL_LAMPORTS,
+      min_start_bid_lamports: MIN_START_BID_LAMPORTS,
+      min_start_bid_sol: MIN_START_BID_LAMPORTS / ONE_SOL_LAMPORTS,
+      min_bid_increment_lamports: MIN_BID_INCREMENT_LAMPORTS,
+      min_bid_increment_sol: MIN_BID_INCREMENT_LAMPORTS / ONE_SOL_LAMPORTS,
       extension_window_seconds: 30
     },
     entry: params.entry,
