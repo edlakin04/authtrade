@@ -1,4 +1,3 @@
-// app/api/dev/bidding-ad/bids/route.ts
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
@@ -8,9 +7,9 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const ONE_SOL_LAMPORTS = 1_000_000_000;
-const MIN_BID_INCREMENT_LAMPORTS = ONE_SOL_LAMPORTS; // 1 SOL minimum raise
-const EXTENSION_WINDOW_MS = 30 * 1000; // if bid lands in final 30s, extend to 30s from now
-const MAX_EXTENSION_END_MS = 60 * 60 * 1000; // hard stop: 1 hour from scheduled start
+const MIN_BID_INCREMENT_LAMPORTS = ONE_SOL_LAMPORTS;
+const EXTENSION_WINDOW_MS = 30 * 1000;
+const MAX_EXTENSION_FROM_SCHEDULED_END_MS = 60 * 60 * 1000;
 
 type RoleRow = { role: string | null };
 
@@ -31,15 +30,19 @@ function currentTargetDate(now = new Date()) {
   return toDateOnlyUtc(addUtcDays(todayUtc, 1));
 }
 
-function biddingAdScheduleForTargetDate(targetDate: string) {
+// MUST match app/api/dev/bidding-ad/route.ts exactly
+function scheduleForTargetDate(targetDate: string) {
   const day = new Date(`${targetDate}T00:00:00.000Z`);
-  const prevDay = addUtcDays(day, -1);
 
-  const entryOpensAt = new Date(Date.UTC(prevDay.getUTCFullYear(), prevDay.getUTCMonth(), prevDay.getUTCDate(), 23, 0, 0, 0));
+  const entryOpensAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 10, 0, 0, 0));
   const auctionStartsAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 11, 0, 0, 0));
   const auctionEndsAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 12, 0, 0, 0));
 
-  return { entryOpensAt, auctionStartsAt, auctionEndsAt };
+  return {
+    entryOpensAt,
+    auctionStartsAt,
+    auctionEndsAt
+  };
 }
 
 async function getViewerWallet() {
@@ -65,7 +68,7 @@ async function requireDev(wallet: string) {
 async function getOrCreateAuction(targetDate: string) {
   const sb = supabaseAdmin();
 
-  const existing = await sb
+  const existingRes = await sb
     .from("bidding_ad_auctions")
     .select(
       "id, target_date, entry_opens_at, auction_starts_at, auction_ends_at, status, highest_bid_lamports, highest_bidder_wallet, highest_bid_entry_id, last_bid_at, bid_count, created_at, updated_at"
@@ -73,12 +76,12 @@ async function getOrCreateAuction(targetDate: string) {
     .eq("target_date", targetDate)
     .maybeSingle();
 
-  if (existing.error) throw new Error(existing.error.message);
-  if (existing.data) return existing.data;
+  if (existingRes.error) throw new Error(existingRes.error.message);
+  if (existingRes.data) return existingRes.data;
 
-  const schedule = biddingAdScheduleForTargetDate(targetDate);
+  const schedule = scheduleForTargetDate(targetDate);
 
-  const created = await sb
+  const insertRes = await sb
     .from("bidding_ad_auctions")
     .insert({
       target_date: targetDate,
@@ -92,47 +95,60 @@ async function getOrCreateAuction(targetDate: string) {
     )
     .single();
 
-  if (created.error) throw new Error(created.error.message);
-  return created.data;
-}
-
-async function refreshAuctionState(auction: any) {
-  const sb = supabaseAdmin();
-  const now = new Date();
-  const startMs = Date.parse(String(auction.auction_starts_at));
-  const endMs = Date.parse(String(auction.auction_ends_at));
-
-  let nextStatus = auction.status as string;
-
-  if (nextStatus === "scheduled" && now.getTime() >= startMs && now.getTime() < endMs) {
-    nextStatus = "live";
-  } else if ((nextStatus === "scheduled" || nextStatus === "live") && now.getTime() >= endMs) {
-    nextStatus = "awaiting_payment";
-  }
-
-  if (nextStatus !== auction.status) {
-    const { data, error } = await sb
+  if (insertRes.error) {
+    const retryRes = await sb
       .from("bidding_ad_auctions")
-      .update({ status: nextStatus })
-      .eq("id", auction.id)
       .select(
         "id, target_date, entry_opens_at, auction_starts_at, auction_ends_at, status, highest_bid_lamports, highest_bidder_wallet, highest_bid_entry_id, last_bid_at, bid_count, created_at, updated_at"
       )
-      .single();
+      .eq("target_date", targetDate)
+      .maybeSingle();
 
-    if (error) throw new Error(error.message);
-    return data;
+    if (retryRes.error) throw new Error(retryRes.error.message);
+    if (!retryRes.data) throw new Error(insertRes.error.message);
+    return retryRes.data;
   }
 
-  return auction;
+  return insertRes.data;
+}
+
+async function syncAuctionStatus(auction: any) {
+  const sb = supabaseAdmin();
+  const now = Date.now();
+
+  const startMs = Date.parse(String(auction.auction_starts_at));
+  const endMs = Date.parse(String(auction.auction_ends_at));
+
+  let nextStatus = String(auction.status);
+
+  if ((nextStatus === "scheduled" || nextStatus === "cancelled") && now >= startMs && now < endMs) {
+    nextStatus = "live";
+  } else if ((nextStatus === "scheduled" || nextStatus === "live") && now >= endMs) {
+    nextStatus = "awaiting_payment";
+  }
+
+  if (nextStatus === auction.status) return auction;
+
+  const { data, error } = await sb
+    .from("bidding_ad_auctions")
+    .update({ status: nextStatus })
+    .eq("id", auction.id)
+    .select(
+      "id, target_date, entry_opens_at, auction_starts_at, auction_ends_at, status, highest_bid_lamports, highest_bidder_wallet, highest_bid_entry_id, last_bid_at, bid_count, created_at, updated_at"
+    )
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data;
 }
 
 async function getViewerEntry(auctionId: string, targetDate: string, wallet: string) {
   const sb = supabaseAdmin();
+
   const { data, error } = await sb
     .from("bidding_ad_entries")
     .select(
-      "id, auction_id, target_date, dev_wallet, coin_id, banner_path, coin_title, token_address, entry_fee_lamports, entry_payment_status, created_at, updated_at"
+      "id, auction_id, target_date, dev_wallet, coin_id, banner_path, coin_title, token_address, entry_fee_lamports, entry_payment_status, entry_payment_signature, entry_payment_confirmed_at, created_at, updated_at"
     )
     .eq("auction_id", auctionId)
     .eq("target_date", targetDate)
@@ -145,11 +161,10 @@ async function getViewerEntry(auctionId: string, targetDate: string, wallet: str
 
 async function getBidHistory(auctionId: string, limit = 50) {
   const sb = supabaseAdmin();
+
   const { data, error } = await sb
     .from("bidding_ad_bids")
-    .select(
-      "id, auction_id, target_date, entry_id, bidder_wallet, amount_lamports, placed_at, created_at"
-    )
+    .select("id, auction_id, target_date, entry_id, bidder_wallet, amount_lamports, placed_at, created_at")
     .eq("auction_id", auctionId)
     .order("placed_at", { ascending: false })
     .limit(limit);
@@ -160,10 +175,11 @@ async function getBidHistory(auctionId: string, limit = 50) {
 
 async function getAuctionWinner(auctionId: string) {
   const sb = supabaseAdmin();
+
   const { data, error } = await sb
     .from("bidding_ad_winners")
     .select(
-      "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, created_at"
+      "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, payment_signature, created_at"
     )
     .eq("auction_id", auctionId)
     .maybeSingle();
@@ -172,20 +188,9 @@ async function getAuctionWinner(auctionId: string) {
   return data ?? null;
 }
 
-function nextMinimumBidLamports(auction: any, viewerEntry: any | null) {
-  if (auction.highest_bid_lamports == null) {
-    return ONE_SOL_LAMPORTS;
-  }
-
-  const current = Number(auction.highest_bid_lamports) || 0;
-  const highestEntryId = auction.highest_bid_entry_id ? String(auction.highest_bid_entry_id) : null;
-  const myEntryId = viewerEntry?.id ? String(viewerEntry.id) : null;
-
-  if (highestEntryId && myEntryId && highestEntryId === myEntryId) {
-    return current + MIN_BID_INCREMENT_LAMPORTS;
-  }
-
-  return current + MIN_BID_INCREMENT_LAMPORTS;
+function nextMinimumBidLamports(auction: any) {
+  if (auction.highest_bid_lamports == null) return ONE_SOL_LAMPORTS;
+  return (Number(auction.highest_bid_lamports) || 0) + MIN_BID_INCREMENT_LAMPORTS;
 }
 
 function buildResponse(params: {
@@ -195,20 +200,21 @@ function buildResponse(params: {
   winner: any | null;
   bids: any[];
 }) {
-  const now = new Date();
+  const nowMs = Date.now();
   const startMs = Date.parse(String(params.auction.auction_starts_at));
   const endMs = Date.parse(String(params.auction.auction_ends_at));
+  const nextMin = nextMinimumBidLamports(params.auction);
 
   return {
     ok: true,
     targetDate: params.targetDate,
-    now: now.toISOString(),
+    now: new Date(nowMs).toISOString(),
     auction: {
       ...params.auction,
-      auction_live: now.getTime() >= startMs && now.getTime() < endMs && params.auction.status === "live",
-      auction_closed: now.getTime() >= endMs,
-      next_min_bid_lamports: nextMinimumBidLamports(params.auction, params.entry),
-      next_min_bid_sol: nextMinimumBidLamports(params.auction, params.entry) / ONE_SOL_LAMPORTS,
+      auction_live: nowMs >= startMs && nowMs < endMs && params.auction.status === "live",
+      auction_closed: nowMs >= endMs,
+      next_min_bid_lamports: nextMin,
+      next_min_bid_sol: nextMin / ONE_SOL_LAMPORTS,
       extension_window_seconds: 30
     },
     entry: params.entry,
@@ -232,7 +238,7 @@ export async function GET(req: Request) {
     const targetDate = (url.searchParams.get("target_date") || currentTargetDate()).trim();
 
     let auction = await getOrCreateAuction(targetDate);
-    auction = await refreshAuctionState(auction);
+    auction = await syncAuctionStatus(auction);
 
     const [entry, bids, winner] = await Promise.all([
       getViewerEntry(String(auction.id), targetDate, wallet),
@@ -269,10 +275,8 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json().catch(() => null);
-
     const targetDate = ((body?.target_date as string | undefined)?.trim() || currentTargetDate());
-    const amountSolRaw = body?.amount_sol;
-    const amountSol = Number(amountSolRaw);
+    const amountSol = Number(body?.amount_sol);
 
     if (!Number.isFinite(amountSol) || amountSol <= 0) {
       return NextResponse.json({ error: "amount_sol is required" }, { status: 400 });
@@ -286,42 +290,31 @@ export async function POST(req: Request) {
     const sb = supabaseAdmin();
 
     let auction = await getOrCreateAuction(targetDate);
-    auction = await refreshAuctionState(auction);
+    auction = await syncAuctionStatus(auction);
 
     const entry = await getViewerEntry(String(auction.id), targetDate, wallet);
     if (!entry) {
-      return NextResponse.json(
-        { error: "You must enter the bidding ad before placing bids" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "You must enter the bidding ad before placing bids" }, { status: 400 });
     }
 
     if (entry.entry_payment_status !== "paid") {
-      return NextResponse.json(
-        { error: "Your entry fee must be paid before you can place bids" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Your entry fee must be paid before you can place bids" }, { status: 400 });
     }
 
     if (auction.status !== "live") {
-      return NextResponse.json(
-        { error: "Auction is not live right now" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Auction is not live right now" }, { status: 400 });
     }
 
     const now = new Date();
+    const nowMs = now.getTime();
     const startMs = Date.parse(String(auction.auction_starts_at));
     const endMs = Date.parse(String(auction.auction_ends_at));
 
-    if (!(now.getTime() >= startMs && now.getTime() < endMs)) {
-      return NextResponse.json(
-        { error: "Auction is not accepting bids right now" },
-        { status: 400 }
-      );
+    if (!(nowMs >= startMs && nowMs < endMs)) {
+      return NextResponse.json({ error: "Auction is not accepting bids right now" }, { status: 400 });
     }
 
-    const minBidLamports = nextMinimumBidLamports(auction, entry);
+    const minBidLamports = nextMinimumBidLamports(auction);
     if (amountLamports < minBidLamports) {
       return NextResponse.json(
         {
@@ -345,9 +338,7 @@ export async function POST(req: Request) {
         amount_lamports: amountLamports,
         placed_at: placedAtIso
       })
-      .select(
-        "id, auction_id, target_date, entry_id, bidder_wallet, amount_lamports, placed_at, created_at"
-      )
+      .select("id, auction_id, target_date, entry_id, bidder_wallet, amount_lamports, placed_at, created_at")
       .single();
 
     if (insertBid.error) {
@@ -355,11 +346,11 @@ export async function POST(req: Request) {
     }
 
     let nextAuctionEndsAtIso = String(auction.auction_ends_at);
-    const msRemaining = endMs - now.getTime();
+    const msRemaining = endMs - nowMs;
 
     if (msRemaining <= EXTENSION_WINDOW_MS) {
-      const hardStopMs = startMs + MAX_EXTENSION_END_MS;
-      const proposedEndMs = now.getTime() + EXTENSION_WINDOW_MS;
+      const hardStopMs = Date.parse(String(auction.auction_starts_at)) + MAX_EXTENSION_FROM_SCHEDULED_END_MS;
+      const proposedEndMs = nowMs + EXTENSION_WINDOW_MS;
       const finalEndMs = Math.min(proposedEndMs, hardStopMs);
       nextAuctionEndsAtIso = new Date(finalEndMs).toISOString();
     }
