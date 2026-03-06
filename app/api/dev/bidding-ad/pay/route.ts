@@ -83,7 +83,6 @@ async function getQueueRowForWallet(auctionId: string, wallet: string) {
     )
     .eq("auction_id", auctionId)
     .eq("bidder_wallet", wallet)
-    .in("status", ["awaiting_payment", "queued", "paid", "expired", "skipped"])
     .order("priority_rank", { ascending: true })
     .limit(1)
     .maybeSingle();
@@ -169,11 +168,6 @@ export async function GET(req: Request) {
     const now = new Date();
     const dueAtMs = currentRow?.payment_due_at ? Date.parse(String(currentRow.payment_due_at)) : NaN;
     const isMyTurn = !!myRow && !!currentRow && String(myRow.id) === String(currentRow.id);
-    const canPay =
-      isMyTurn &&
-      currentRow.status === "awaiting_payment" &&
-      Number.isFinite(dueAtMs) &&
-      now.getTime() <= dueAtMs;
 
     return NextResponse.json({
       ok: true,
@@ -184,7 +178,11 @@ export async function GET(req: Request) {
       payment: {
         treasuryWallet: getTreasuryWallet(),
         is_my_turn: isMyTurn,
-        can_pay: canPay,
+        can_pay:
+          isMyTurn &&
+          currentRow?.status === "awaiting_payment" &&
+          Number.isFinite(dueAtMs) &&
+          now.getTime() <= dueAtMs,
         amount_lamports: isMyTurn ? Number(currentRow?.amount_lamports) || 0 : null,
         amount_sol: isMyTurn ? (Number(currentRow?.amount_lamports) || 0) / 1_000_000_000 : null,
         payment_due_at: currentRow?.payment_due_at ?? null,
