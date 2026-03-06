@@ -31,6 +31,7 @@ type BiddingAdStatus = {
     auctionLive: boolean;
     auctionClosed: boolean;
     hasEntered: boolean;
+    hasDraftEntry?: boolean;
     iWon: boolean;
     state: "can_enter" | "entered" | "auction_live" | "won" | "lost" | "closed";
   };
@@ -65,6 +66,8 @@ type BiddingAdStatus = {
     token_address: string | null;
     entry_fee_lamports: number;
     entry_payment_status: "pending" | "paid" | "failed" | "refunded";
+    entry_payment_signature?: string | null;
+    entry_payment_confirmed_at?: string | null;
     created_at: string;
     updated_at: string;
   } | null;
@@ -81,7 +84,6 @@ type BiddingAdStatus = {
     ad_starts_at: string;
     ad_ends_at: string;
     payment_confirmed_at: string | null;
-    payment_signature?: string | null;
     created_at: string;
   } | null;
   ownedCoins: Array<{
@@ -93,10 +95,11 @@ type BiddingAdStatus = {
     created_at: string;
   }>;
   payment?: {
-    treasuryWallet?: string;
-    entryFeeSol?: number;
-    entryFeeLamports?: number;
-    entryConfirmed?: boolean;
+    treasuryWallet: string;
+    entryFeeSol: number;
+    entryFeeLamports: number;
+    entryConfirmed: boolean;
+    entryPending?: boolean;
     kind?: string;
   };
 };
@@ -125,18 +128,18 @@ type BidsResponse = {
 type PaymentQueueRow = {
   id: string;
   auction_id: string;
-  target_date: string;
+  target_date?: string;
   entry_id: string;
   bid_id: string;
   bidder_wallet: string;
   amount_lamports: number;
   priority_rank: number;
-  status: "queued" | "awaiting_payment" | "paid" | "skipped" | "expired";
+  status: "queued" | "awaiting_payment" | "paid" | "expired" | "skipped";
   payment_due_at: string | null;
-  paid_at: string | null;
-  skipped_at: string | null;
-  created_at: string;
-  updated_at: string;
+  paid_at?: string | null;
+  skipped_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
 };
 
 type PayStatusResponse = {
@@ -146,7 +149,7 @@ type PayStatusResponse = {
   queue: PaymentQueueRow[];
   me: PaymentQueueRow | null;
   payment: {
-    treasuryWallet: string;
+    treasuryWallet?: string;
     is_my_turn: boolean;
     can_pay: boolean;
     amount_lamports: number | null;
@@ -377,9 +380,22 @@ export default function AuctionPage({
   const currentHighestSol = fmtSolFromLamports(displayAuction?.highest_bid_lamports ?? null);
   const entryFeeSol = data?.pricing?.entryFeeSol ?? 1;
 
-  const canShowBidBox = !!data?.ui?.hasEntered && displayAuction?.status === "live";
-  const canShowAuctionButton = !!data?.ui?.hasEntered;
+  const entryConfirmed =
+    !!data?.ui?.hasEntered &&
+    !!data?.payment?.entryConfirmed &&
+    data?.entry?.entry_payment_status === "paid";
+
+  const hasDraftOnly =
+    !!data?.entry &&
+    (data?.payment?.entryPending === true ||
+      data?.entry?.entry_payment_status === "pending" ||
+      data?.entry?.entry_payment_status === "failed") &&
+    !entryConfirmed;
+
+  const canShowBidBox = entryConfirmed && displayAuction?.status === "live";
+  const canShowAuctionContent = entryConfirmed || !!data?.ui?.iWon || !!displayWinner;
   const showStayMessage =
+    entryConfirmed &&
     !!displayAuction &&
     (displayAuction.status === "awaiting_payment" ||
       displayAuction.status === "completed" ||
@@ -394,7 +410,7 @@ export default function AuctionPage({
   const canPayWinnerNow = !!payData?.payment?.can_pay;
   const isMyTurnToPay = !!payData?.payment?.is_my_turn;
   const myQueueRow = payData?.me ?? null;
-  const winnerAmountLamports = Number(payData?.payment?.amount_lamports ?? myQueueRow?.amount_lamports ?? 0);
+  const winnerAmountLamports = Number(myQueueRow?.amount_lamports ?? payData?.payment?.amount_lamports ?? 0);
 
   async function placeBid() {
     if (!targetDate) return;
@@ -449,8 +465,10 @@ export default function AuctionPage({
       return;
     }
 
-    const payTreasuryWallet = payData?.payment?.treasuryWallet || treasuryWallet;
-    if (!payTreasuryWallet) {
+    const treasury =
+      payData?.payment?.treasuryWallet || data?.pricing?.treasuryWallet || treasuryWallet;
+
+    if (!treasury) {
       alert("Treasury wallet is not configured.");
       return;
     }
@@ -462,7 +480,7 @@ export default function AuctionPage({
 
     setWinnerPayBusy(true);
     try {
-      const treasuryPubkey = new PublicKey(payTreasuryWallet);
+      const treasuryPubkey = new PublicKey(treasury);
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
 
       const tx = new Transaction({
@@ -541,21 +559,77 @@ export default function AuctionPage({
           <div className="mt-6 rounded-2xl border border-red-400/20 bg-red-400/10 p-5 text-sm text-red-200">
             {err}
           </div>
-        ) : !data || !displayAuction ? null : (
+        ) : !data || !displayAuction ? null : !canShowAuctionContent ? (
+          <div className="mt-6 grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+            <section className="rounded-2xl border border-red-400/20 bg-red-400/10 p-6">
+              <h2 className="text-lg font-semibold text-red-100">Auction access locked</h2>
+
+              <div className="mt-3 text-sm text-red-50">
+                {!data.entry
+                  ? "You do not have an entry for this auction yet."
+                  : hasDraftOnly
+                    ? "Your banner draft exists, but your entry fee is not confirmed yet."
+                    : "Your paid entry is required before you can access the auction page."}
+              </div>
+
+              <div className="mt-4 space-y-2 text-sm text-red-50/90">
+                <div>Entry fee: {entryFeeSol} SOL</div>
+                <div>Entry opens: {fmtDate(data.schedule.entryOpensAt)}</div>
+                <div>Auction starts: {fmtDate(data.schedule.auctionStartsAt)}</div>
+                <div>Auction ends: {fmtDate(data.schedule.auctionEndsAt)}</div>
+              </div>
+
+              {data.entry ? (
+                <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-4">
+                  <div className="text-sm text-zinc-200">
+                    Coin: <span className="font-semibold text-white">{selectedCoinLabel}</span>
+                  </div>
+                  <div className="mt-2 text-xs text-zinc-400">
+                    Entry payment status: {data.entry.entry_payment_status}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="mt-5">
+                <Link
+                  href="/dev/profile"
+                  className="inline-flex rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200"
+                >
+                  Go back to dev profile
+                </Link>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
+              <h2 className="text-lg font-semibold">Schedule</h2>
+
+              <div className="mt-4 space-y-2">
+                <div className="rounded-xl border border-white/10 bg-black/30 px-3 py-3">
+                  <div className="text-[11px] uppercase tracking-wide text-zinc-500">Entry opens</div>
+                  <div className="mt-1 text-sm text-zinc-200">{fmtDate(data.schedule.entryOpensAt)}</div>
+                </div>
+
+                <div className="rounded-xl border border-white/10 bg-black/30 px-3 py-3">
+                  <div className="text-[11px] uppercase tracking-wide text-zinc-500">Auction starts</div>
+                  <div className="mt-1 text-sm text-zinc-200">{fmtDate(data.schedule.auctionStartsAt)}</div>
+                </div>
+
+                <div className="rounded-xl border border-white/10 bg-black/30 px-3 py-3">
+                  <div className="text-[11px] uppercase tracking-wide text-zinc-500">Auction ends</div>
+                  <div className="mt-1 text-sm text-zinc-200">{fmtDate(displayAuction.auction_ends_at)}</div>
+                </div>
+              </div>
+            </section>
+          </div>
+        ) : (
           <>
             <div className="mt-6 grid gap-6 lg:grid-cols-[1.25fr_0.75fr]">
               <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 className="text-lg font-semibold">Auction status</h2>
-                  {canShowAuctionButton ? (
-                    <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
-                      You’re entered
-                    </span>
-                  ) : (
-                    <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
-                      View only
-                    </span>
-                  )}
+                  <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-zinc-300">
+                    Paid entry confirmed
+                  </span>
                 </div>
 
                 <div className="mt-4 grid gap-4 md:grid-cols-2">
@@ -688,7 +762,7 @@ export default function AuctionPage({
                   <div className="mt-4 rounded-xl border border-cyan-400/20 bg-cyan-400/10 p-4">
                     <div className="text-sm font-semibold text-cyan-100">Your payment window is active</div>
                     <div className="mt-2 text-sm text-cyan-50">
-                      Amount due: <span className="font-semibold">{fmtSolFromLamports(winnerAmountLamports)}</span>
+                      Amount due: <span className="font-semibold">{fmtSolFromLamports(myQueueRow.amount_lamports)}</span>
                     </div>
                     <div className="mt-1 text-xs text-cyan-200">
                       Due by: {fmtDate(payData?.payment?.payment_due_at)}
@@ -704,7 +778,7 @@ export default function AuctionPage({
                       disabled={!canPayWinnerNow || winnerPayBusy}
                       className="mt-4 rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
                     >
-                      {winnerPayBusy ? "Paying…" : `Pay ${fmtSolFromLamports(winnerAmountLamports)}`}
+                      {winnerPayBusy ? "Paying…" : `Pay ${fmtSolFromLamports(myQueueRow.amount_lamports)}`}
                     </button>
                   </div>
                 ) : null}
@@ -715,11 +789,7 @@ export default function AuctionPage({
               <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
                 <h2 className="text-lg font-semibold">Place bid</h2>
 
-                {!data.ui.hasEntered ? (
-                  <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-4 text-sm text-zinc-300">
-                    You need to enter from your dev profile before you can bid.
-                  </div>
-                ) : displayAuction.status !== "live" ? (
+                {displayAuction.status !== "live" ? (
                   <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-4 text-sm text-zinc-300">
                     Bidding is only available while the auction is live.
                   </div>
