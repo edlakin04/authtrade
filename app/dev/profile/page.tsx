@@ -919,21 +919,22 @@ export default function DevProfilePage() {
         console.warn("Bidding ad payment confirm timed out, continuing to server verification:", confirmErr);
       }
 
-      const uploadFd = new FormData();
-uploadFd.append("coin_id", biddingAdCoinId);
-uploadFd.append("file", biddingAdBannerFile);
+      const confirmFd = new FormData();
+confirmFd.append("signature", signature);
+confirmFd.append("coin_id", biddingAdCoinId);
+confirmFd.append("file", biddingAdBannerFile);
 if (biddingAd?.targetDate) {
-  uploadFd.append("target_date", biddingAd.targetDate);
+  confirmFd.append("target_date", biddingAd.targetDate);
 }
 
-const saveRes = await fetch("/api/dev/bidding-ad", {
+const confirmRes = await fetch("/api/payments/confirm-bidding-entry", {
   method: "POST",
-  body: uploadFd
+  body: confirmFd
 });
 
-const saveJson = await saveRes.json().catch(() => ({}));
-if (!saveRes.ok) {
-  throw new Error(saveJson?.error || "Failed to save bidding ad entry");
+const confirmJson = await confirmRes.json().catch(() => ({}));
+if (!confirmRes.ok) {
+  throw new Error(confirmJson?.error || confirmJson?.details || "Entry payment confirmation failed");
 }
 
 const confirmRes = await fetch("/api/payments/confirm-bidding-entry", {
