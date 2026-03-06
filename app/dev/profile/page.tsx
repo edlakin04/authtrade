@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import TopNav from "@/components/TopNav";
 import Link from "next/link";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { Connection, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { Connection, Transaction } from "@solana/web3.js";
 
 type PollOption = {
   id: string;
@@ -149,6 +149,7 @@ type BiddingAdStatus = {
     auctionLive: boolean;
     auctionClosed: boolean;
     hasEntered: boolean;
+    hasDraftEntry?: boolean;
     iWon: boolean;
     state: "can_enter" | "entered" | "auction_live" | "won" | "lost" | "closed";
   };
@@ -211,8 +212,17 @@ type BiddingAdStatus = {
     entryFeeSol: number;
     entryFeeLamports: number;
     entryConfirmed: boolean;
+    entryPending?: boolean;
     kind?: string;
   };
+};
+
+type BuildBiddingEntryPaymentResponse = {
+  ok?: true;
+  txBase64?: string;
+  tx_base64?: string;
+  transaction?: string;
+  transaction_base64?: string;
 };
 
 const BANNER_MAX_BYTES = 15 * 1024 * 1024;
@@ -231,6 +241,15 @@ const BIDDING_AD_BANNER_MAX_BYTES = 15 * 1024 * 1024;
 const BIDDING_AD_BANNER_ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
 const BIDDING_AD_BANNER_RECOMMENDED = "1500×500 (3:1)";
 
+function decodeBase64ToUint8Array(base64: string) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
 export default function DevProfilePage() {
   const { publicKey, connected, sendTransaction } = useWallet();
 
@@ -238,8 +257,6 @@ export default function DevProfilePage() {
     process.env.NEXT_PUBLIC_SOLANA_RPC_URL ||
     process.env.NEXT_PUBLIC_RPC_URL ||
     "https://api.mainnet-beta.solana.com";
-
-  const treasuryWallet = process.env.NEXT_PUBLIC_TREASURY_WALLET || "";
 
   const connection = useMemo(() => new Connection(rpcUrl, "confirmed"), [rpcUrl]);
 
@@ -809,7 +826,7 @@ export default function DevProfilePage() {
       throw new Error("No bidding ad entry found to pay for.");
     }
 
-    if (currentStatus.entry.entry_payment_status === "paid") {
+    if (currentStatus.payment?.entryConfirmed || currentStatus.entry.entry_payment_status === "paid") {
       await refreshBiddingAd();
       return;
     }
@@ -822,57 +839,51 @@ export default function DevProfilePage() {
       throw new Error("Wallet does not support sending transactions.");
     }
 
-    const lamports = Number(currentStatus.pricing?.entryFeeLamports ?? 0);
-    if (!Number.isFinite(lamports) || lamports <= 0) {
-      throw new Error("Invalid entry fee amount.");
-    }
-
     setBiddingAdPayBusy(true);
     try {
-      const treasury =
-        currentStatus.payment?.treasuryWallet ||
-        currentStatus.pricing?.treasuryWallet ||
-        treasuryWallet;
+      const buildRes = await fetch("/api/payments/create-bidding-entry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          target_date: currentStatus.targetDate
+        })
+      });
 
-      if (!treasury) {
-        throw new Error("Treasury wallet is not configured.");
+      const buildJson = (await buildRes.json().catch(() => ({}))) as BuildBiddingEntryPaymentResponse & {
+        error?: string;
+      };
+
+      if (!buildRes.ok) {
+        throw new Error(buildJson?.error ?? "Failed to create entry payment transaction");
       }
 
-      const treasuryPubkey = new PublicKey(treasury);
+      const txBase64 =
+        buildJson.txBase64 ||
+        buildJson.tx_base64 ||
+        buildJson.transaction ||
+        buildJson.transaction_base64 ||
+        "";
 
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+      if (!txBase64) {
+        throw new Error("Payment transaction was not returned by the server.");
+      }
 
-      const tx = new Transaction({
-        feePayer: publicKey,
-        recentBlockhash: blockhash
-      }).add(
-        SystemProgram.transfer({
-          fromPubkey: publicKey,
-          toPubkey: treasuryPubkey,
-          lamports
-        })
-      );
+      const txBytes = decodeBase64ToUint8Array(txBase64);
+      const tx = Transaction.from(txBytes);
 
       const signature = await sendTransaction(tx, connection, {
         skipPreflight: false,
         preflightCommitment: "confirmed"
       });
 
-      await connection.confirmTransaction(
-        {
-          signature,
-          blockhash,
-          lastValidBlockHeight
-        },
-        "confirmed"
-      );
+      await connection.confirmTransaction(signature, "confirmed");
 
       const confirmRes = await fetch("/api/payments/confirm-bidding-entry", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           signature,
-          entry_id: currentStatus.entry.id
+          target_date: currentStatus.targetDate
         })
       });
 
@@ -882,6 +893,7 @@ export default function DevProfilePage() {
       }
 
       await refreshBiddingAd();
+      window.location.href = `/ads/auction/${encodeURIComponent(currentStatus.targetDate)}`;
     } finally {
       setBiddingAdPayBusy(false);
     }
@@ -939,16 +951,12 @@ export default function DevProfilePage() {
       const savedStatus = json as BiddingAdStatus;
       setBiddingAd(savedStatus);
 
-      if (savedStatus.entry?.entry_payment_status !== "paid") {
-        try {
-          await payBiddingAdEntryFee(savedStatus);
-        } catch (e: any) {
-          setBiddingAdBannerErr(e?.message ?? "Entry saved, but payment failed");
-          await refreshBiddingAd();
-          return;
-        }
-      } else {
+      try {
+        await payBiddingAdEntryFee(savedStatus);
+      } catch (e: any) {
+        setBiddingAdBannerErr(e?.message ?? "Entry saved, but payment failed");
         await refreshBiddingAd();
+        return;
       }
 
       setBiddingAdEntryOpen(false);
@@ -987,7 +995,6 @@ export default function DevProfilePage() {
   async function resumeBiddingAdPayment() {
     try {
       await payBiddingAdEntryFee();
-      alert("Entry fee paid successfully.");
     } catch (e: any) {
       alert(e?.message ?? "Failed to pay entry fee");
     }
@@ -1317,8 +1324,10 @@ export default function DevProfilePage() {
   const selectedBiddingAdCoin = biddingAd?.ownedCoins?.find((c) => c.id === biddingAdCoinId) ?? null;
 
   const biddingAdCanEdit = biddingAdState === "can_enter" || biddingAdState === "entered";
+  const biddingAdHasDraftEntry = !!biddingAd?.entry && !biddingAd?.ui?.hasEntered;
   const biddingAdPaymentPending =
-    !!biddingAd?.entry && biddingAd.entry.entry_payment_status === "pending";
+    !!biddingAd?.entry &&
+    (biddingAd?.payment?.entryPending === true || biddingAd.entry.entry_payment_status === "pending");
 
   const biddingAdCanSave =
     biddingAdCanEdit &&
@@ -1358,23 +1367,31 @@ export default function DevProfilePage() {
 
   function biddingAdStatusText() {
     if (!biddingAd) return "Loading Bidding Ad…";
+
+    if (biddingAdPaymentPending) {
+      return "Your banner and coin are saved. Pay the entry fee to fully join the auction.";
+    }
+
     if (biddingAdState === "can_enter") {
-      return "Entry is open. Choose your coin, upload your banner, and join the paid auction.";
+      return "Entry is open. Choose your coin, upload your banner, and pay the entry fee to join the auction.";
     }
+
     if (biddingAdState === "entered") {
-      return biddingAdPaymentPending
-        ? "Your entry is saved, but your entry fee is still unpaid."
-        : "You’re entered for tomorrow’s paid bidding ad.";
+      return "You’re entered for tomorrow’s paid bidding ad.";
     }
+
     if (biddingAdState === "auction_live") {
       return "Auction is live. Go to the auction page to bid or monitor the result.";
     }
+
     if (biddingAdState === "won") {
       return "You won the paid ad slot.";
     }
+
     if (biddingAdState === "lost") {
       return "Auction ended and another dev won the paid ad slot.";
     }
+
     return "Entry is currently closed.";
   }
 
@@ -1609,7 +1626,7 @@ export default function DevProfilePage() {
                 {biddingAdLoading ? "Loading…" : biddingAdCanEdit ? "Enter Bidding Ad" : "Bidding Ad"}
               </button>
 
-              {biddingAd?.ui?.hasEntered && biddingAdState === "entered" ? (
+              {biddingAd?.entry && biddingAdCanEdit ? (
                 <button
                   type="button"
                   onClick={removeBiddingAdEntry}
@@ -1651,7 +1668,9 @@ export default function DevProfilePage() {
 
                 {biddingAd?.entry ? (
                   <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3">
-                    <div className="text-xs font-semibold text-zinc-200">Current entry</div>
+                    <div className="text-xs font-semibold text-zinc-200">
+                      {biddingAdHasDraftEntry ? "Saved draft" : "Current entry"}
+                    </div>
                     <div className="mt-2 text-sm text-zinc-300">
                       Coin: <span className="font-semibold text-zinc-100">{biddingAdEntryCoin || "Selected coin"}</span>
                     </div>
@@ -1960,7 +1979,7 @@ export default function DevProfilePage() {
                 <button
                   type="button"
                   onClick={removeBiddingAdEntry}
-                  disabled={!biddingAd?.ui?.hasEntered || biddingAdDeleteBusy || biddingAdSubmitBusy || biddingAdPayBusy}
+                  disabled={!biddingAd?.entry || biddingAdDeleteBusy || biddingAdSubmitBusy || biddingAdPayBusy}
                   className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-60"
                 >
                   {biddingAdDeleteBusy ? "Removing…" : "Remove entry"}
@@ -1986,11 +2005,9 @@ export default function DevProfilePage() {
                   >
                     {biddingAdSubmitBusy
                       ? "Saving…"
-                      : biddingAdPaymentPending
-                      ? `Save & pay ${biddingAd?.pricing?.entryFeeSol ?? 1} SOL`
                       : biddingAd?.ui?.hasEntered
                         ? "Update entry"
-                        : `Save & pay ${biddingAd?.pricing?.entryFeeSol ?? 1} SOL`}
+                        : `Pay ${biddingAd?.pricing?.entryFeeSol ?? 1} SOL`}
                   </button>
                 </div>
               </div>
