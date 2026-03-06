@@ -29,14 +29,28 @@ function currentTargetDate(now = new Date()) {
 function adWindowForTargetDate(targetDate: string) {
   const day = new Date(`${targetDate}T00:00:00.000Z`);
 
-  // Paid ad runs after Golden Hour ends: 13:00 UTC -> +23h
-  const adStartsAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 13, 0, 0, 0));
+  const adStartsAt = new Date(
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 13, 0, 0, 0)
+  );
   const adEndsAt = new Date(adStartsAt.getTime() + 23 * 60 * 60 * 1000);
 
   return {
     adStartsAt,
     adEndsAt
   };
+}
+
+function getTreasuryWallet() {
+  const wallet =
+    process.env.TREASURY_WALLET ||
+    process.env.NEXT_PUBLIC_TREASURY_WALLET ||
+    "";
+
+  if (!wallet.trim()) {
+    throw new Error("Server missing TREASURY_WALLET / NEXT_PUBLIC_TREASURY_WALLET");
+  }
+
+  return wallet.trim();
 }
 
 async function getViewerWallet() {
@@ -54,7 +68,12 @@ async function requireDev(wallet: string) {
   const prof = await sb.from("dev_profiles").select("wallet").eq("wallet", wallet).maybeSingle();
   if (!prof.error && prof.data?.wallet) return true;
 
-  const { data: user } = await sb.from("users").select("role").eq("wallet", wallet).maybeSingle<RoleRow>();
+  const { data: user } = await sb
+    .from("users")
+    .select("role")
+    .eq("wallet", wallet)
+    .maybeSingle<RoleRow>();
+
   const role = (user?.role ?? null) as string | null;
   return role === "dev" || role === "admin";
 }
@@ -107,15 +126,30 @@ async function getQueueRowById(rowId: string) {
   return data ?? null;
 }
 
-async function getExistingWinner(auctionId: string) {
+async function getWinnerByAuctionId(auctionId: string) {
   const sb = supabaseAdmin();
 
   const { data, error } = await sb
     .from("bidding_ad_winners")
     .select(
-      "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, created_at"
+      "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, payment_signature, created_at"
     )
     .eq("auction_id", auctionId)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  return data ?? null;
+}
+
+async function getWinnerByPaymentSignature(signature: string) {
+  const sb = supabaseAdmin();
+
+  const { data, error } = await sb
+    .from("bidding_ad_winners")
+    .select(
+      "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, payment_signature, created_at"
+    )
+    .eq("payment_signature", signature)
     .maybeSingle();
 
   if (error) throw new Error(error.message);
@@ -128,7 +162,7 @@ async function getEntry(entryId: string) {
   const { data, error } = await sb
     .from("bidding_ad_entries")
     .select(
-      "id, auction_id, target_date, dev_wallet, coin_id, banner_path, coin_title, token_address, entry_fee_lamports, entry_payment_status, created_at, updated_at"
+      "id, auction_id, target_date, dev_wallet, coin_id, banner_path, coin_title, token_address, entry_fee_lamports, entry_payment_status, entry_payment_signature, entry_payment_confirmed_at, created_at, updated_at"
     )
     .eq("id", entryId)
     .maybeSingle();
@@ -179,8 +213,9 @@ async function createWinner(params: {
   bidId: string;
   amountLamports: number;
   paidAtIso: string;
+  signature: string;
 }) {
-  const existing = await getExistingWinner(params.auctionId);
+  const existing = await getWinnerByAuctionId(params.auctionId);
   if (existing) return existing;
 
   const entry = await getEntry(params.entryId);
@@ -202,10 +237,11 @@ async function createWinner(params: {
       amount_lamports: params.amountLamports,
       ad_starts_at: adStartsAt.toISOString(),
       ad_ends_at: adEndsAt.toISOString(),
-      payment_confirmed_at: params.paidAtIso
+      payment_confirmed_at: params.paidAtIso,
+      payment_signature: params.signature
     })
     .select(
-      "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, created_at"
+      "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, payment_signature, created_at"
     )
     .single();
 
@@ -243,7 +279,6 @@ async function recordPayment(params: {
     .maybeSingle();
 
   if (existingErr) throw new Error(existingErr.message);
-
   if (existing?.signature) return;
 
   const { error } = await sb.from("payments").insert({
@@ -260,7 +295,7 @@ async function recordPayment(params: {
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => null);
-    const signature = body?.signature as string | undefined;
+    const signature = (body?.signature as string | undefined)?.trim();
     const targetDate = ((body?.target_date as string | undefined)?.trim() || currentTargetDate());
 
     if (!signature) {
@@ -281,12 +316,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Server missing SOLANA_RPC_URL" }, { status: 500 });
     }
 
-    const treasury =
-      process.env.TREASURY_WALLET ||
-      process.env.NEXT_PUBLIC_TREASURY_WALLET;
+    const treasuryWallet = getTreasuryWallet();
 
-    if (!treasury) {
-      return NextResponse.json({ error: "Server missing TREASURY_WALLET" }, { status: 500 });
+    const winnerBySig = await getWinnerByPaymentSignature(signature);
+    if (winnerBySig) {
+      const auctionForWinner = await getAuction(String(winnerBySig.target_date));
+      return NextResponse.json({
+        ok: true,
+        auction: auctionForWinner,
+        winner: winnerBySig,
+        queue: auctionForWinner ? await getQueue(String(winnerBySig.auction_id)) : [],
+        message: "Winner payment already confirmed with this signature"
+      });
     }
 
     const auction = await getAuction(targetDate);
@@ -295,10 +336,13 @@ export async function POST(req: Request) {
     }
 
     if (auction.status !== "awaiting_payment" && auction.status !== "completed") {
-      return NextResponse.json({ error: "Auction is not awaiting winner payment" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Auction is not awaiting winner payment" },
+        { status: 400 }
+      );
     }
 
-    const existingWinner = await getExistingWinner(String(auction.id));
+    const existingWinner = await getWinnerByAuctionId(String(auction.id));
     if (existingWinner?.payment_confirmed_at) {
       return NextResponse.json({
         ok: true,
@@ -311,7 +355,10 @@ export async function POST(req: Request) {
 
     const currentRow = await getCurrentAwaitingPaymentRow(String(auction.id));
     if (!currentRow) {
-      return NextResponse.json({ error: "There is no active payment window right now" }, { status: 400 });
+      return NextResponse.json(
+        { error: "There is no active payment window right now" },
+        { status: 400 }
+      );
     }
 
     if (String(currentRow.bidder_wallet) !== wallet) {
@@ -334,7 +381,10 @@ export async function POST(req: Request) {
     });
 
     if (!tx || !tx.meta) {
-      return NextResponse.json({ error: "Transaction not confirmed yet. Try again." }, { status: 400 });
+      return NextResponse.json(
+        { error: "Transaction not confirmed yet. Try again." },
+        { status: 400 }
+      );
     }
 
     const staticKeys = tx.transaction.message.getAccountKeys().staticAccountKeys;
@@ -344,16 +394,24 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Payer wallet mismatch" }, { status: 400 });
     }
 
-    const treasuryKey = new PublicKey(treasury);
+    const treasuryKey = new PublicKey(treasuryWallet);
     const treasuryIndex = staticKeys.findIndex((k) => k.equals(treasuryKey));
+
     if (treasuryIndex === -1) {
-      return NextResponse.json({ error: "Treasury wallet not involved in transaction" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Treasury wallet not involved in transaction" },
+        { status: 400 }
+      );
     }
 
     const preLamports = tx.meta.preBalances[treasuryIndex] ?? 0;
     const postLamports = tx.meta.postBalances[treasuryIndex] ?? 0;
     const deltaLamports = postLamports - preLamports;
     const expectedLamports = Number(currentRow.amount_lamports) || 0;
+
+    if (!Number.isFinite(expectedLamports) || expectedLamports <= 0) {
+      return NextResponse.json({ error: "Winning amount is invalid" }, { status: 400 });
+    }
 
     if (deltaLamports < expectedLamports) {
       return NextResponse.json(
@@ -370,7 +428,7 @@ export async function POST(req: Request) {
     }
 
     if (rowNow.status === "paid") {
-      const winner = await getExistingWinner(String(auction.id));
+      const winner = await getWinnerByAuctionId(String(auction.id));
       return NextResponse.json({
         ok: true,
         auction,
@@ -385,7 +443,7 @@ export async function POST(req: Request) {
     }
 
     const paidAtIso = new Date().toISOString();
-    const paidRow = await markQueueRowPaid(String(currentRow.id), paidAtIso);
+    const paidRow = await markQueueRowPaid(String(rowNow.id), paidAtIso);
 
     await recordPayment({
       signature,
@@ -400,7 +458,8 @@ export async function POST(req: Request) {
       entryId: String(paidRow.entry_id),
       bidId: String(paidRow.bid_id),
       amountLamports: Number(paidRow.amount_lamports) || 0,
-      paidAtIso
+      paidAtIso,
+      signature
     });
 
     const updatedAuction = await markAuctionCompleted(String(auction.id));
