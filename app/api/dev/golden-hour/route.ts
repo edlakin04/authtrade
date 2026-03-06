@@ -1,4 +1,3 @@
-// app/api/dev/golden-hour/route.ts
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
@@ -9,6 +8,10 @@ export const runtime = "nodejs";
 
 type RoleRow = { role: string | null };
 type ReviewAgg = { count: number; avg: number | null };
+
+const GOLDEN_HOUR_BANNER_BUCKET = "golden-hour-banners";
+const MAX_BANNER_BYTES = 15 * 1024 * 1024; // 15MB
+const ALLOWED_BANNER_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 function startOfUtcDay(d: Date) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
@@ -22,6 +25,18 @@ function toDateOnlyUtc(d: Date) {
   return d.toISOString().slice(0, 10);
 }
 
+function safeTrim(v: FormDataEntryValue | null) {
+  if (typeof v !== "string") return "";
+  return v.trim();
+}
+
+function extFromType(type: string) {
+  if (type === "image/jpeg") return "jpg";
+  if (type === "image/png") return "png";
+  if (type === "image/webp") return "webp";
+  return "bin";
+}
+
 // Golden Hour timing model for a target day:
 // - opt-in opens at previous day 00:00 UTC
 // - reveal at target day 11:00 UTC
@@ -31,7 +46,9 @@ function scheduleForTargetDate(targetDate: string) {
   const day = new Date(`${targetDate}T00:00:00.000Z`);
   const prevDay = addUtcDays(day, -1);
 
-  const optInOpensAt = new Date(Date.UTC(prevDay.getUTCFullYear(), prevDay.getUTCMonth(), prevDay.getUTCDate(), 0, 0, 0, 0));
+  const optInOpensAt = new Date(
+    Date.UTC(prevDay.getUTCFullYear(), prevDay.getUTCMonth(), prevDay.getUTCDate(), 0, 0, 0, 0)
+  );
   const revealAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 11, 0, 0, 0));
   const startsAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 12, 0, 0, 0));
   const endsAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 13, 0, 0, 0));
@@ -73,19 +90,14 @@ async function requireDev(wallet: string) {
 async function getReviewAgg(wallet: string): Promise<ReviewAgg> {
   const sb = supabaseAdmin();
 
-  const { data, error } = await sb
-    .from("dev_reviews")
-    .select("rating")
-    .eq("dev_wallet", wallet);
+  const { data, error } = await sb.from("dev_reviews").select("rating").eq("dev_wallet", wallet);
 
   if (error) return { count: 0, avg: null };
 
   const rows = data ?? [];
   if (!rows.length) return { count: 0, avg: null };
 
-  const ratings = rows
-    .map((r: any) => Number(r.rating))
-    .filter((n) => Number.isFinite(n));
+  const ratings = rows.map((r: any) => Number(r.rating)).filter((n) => Number.isFinite(n));
 
   if (!ratings.length) return { count: 0, avg: null };
 
@@ -125,7 +137,9 @@ async function getWinner(targetDate: string) {
   const sb = supabaseAdmin();
   const { data, error } = await sb
     .from("golden_hour_winners")
-    .select("id, target_date, entry_id, dev_wallet, coin_id, banner_path, opt_in_opens_at, reveal_at, starts_at, ends_at, created_at")
+    .select(
+      "id, target_date, entry_id, dev_wallet, coin_id, banner_path, opt_in_opens_at, reveal_at, starts_at, ends_at, created_at"
+    )
     .eq("target_date", targetDate)
     .maybeSingle();
 
@@ -154,13 +168,7 @@ function buildStatus(params: {
   const iWon = !!params.winner && params.winner.dev_wallet === params.wallet;
   const iLost = revealLive && winnerChosen && !iWon && hasEntered;
 
-  let state:
-    | "not_eligible"
-    | "can_enter"
-    | "opted_in"
-    | "won"
-    | "lost"
-    | "closed" = "can_enter";
+  let state: "not_eligible" | "can_enter" | "opted_in" | "won" | "lost" | "closed" = "can_enter";
 
   if (!isEligible) state = "not_eligible";
   else if (iWon) state = "won";
@@ -198,6 +206,40 @@ function buildStatus(params: {
     winner: revealLive ? params.winner : null,
     ownedCoins: params.ownedCoins
   };
+}
+
+async function uploadGoldenHourBanner(
+  wallet: string,
+  targetDate: string,
+  coinId: string,
+  file: File
+) {
+  if (!ALLOWED_BANNER_TYPES.has(file.type)) {
+    throw new Error("Invalid banner file type. Allowed: JPG, PNG, WEBP.");
+  }
+
+  if (file.size <= 0) {
+    throw new Error("Empty banner file.");
+  }
+
+  if (file.size > MAX_BANNER_BYTES) {
+    throw new Error("Banner file too large (max 15MB).");
+  }
+
+  const sb = supabaseAdmin();
+  const ext = extFromType(file.type);
+  const path = `${wallet}/${targetDate}/${coinId}/banner.${ext}`;
+
+  const buf = Buffer.from(await file.arrayBuffer());
+
+  const { error } = await sb.storage.from(GOLDEN_HOUR_BANNER_BUCKET).upload(path, buf, {
+    contentType: file.type,
+    upsert: true
+  });
+
+  if (error) throw new Error(error.message);
+
+  return path;
 }
 
 export async function GET(req: Request) {
@@ -250,18 +292,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Not a dev" }, { status: 403 });
     }
 
-    const body = await req.json().catch(() => null);
+    const form = await req.formData().catch(() => null);
+    if (!form) {
+      return NextResponse.json({ error: "Invalid form data" }, { status: 400 });
+    }
 
-    const targetDate = ((body?.target_date as string | undefined)?.trim() || currentTargetDate());
-    const coinId = ((body?.coin_id as string | undefined)?.trim() || "");
-    const bannerPath = ((body?.banner_path as string | undefined)?.trim() || "");
+    const targetDate = safeTrim(form.get("target_date")) || currentTargetDate();
+    const coinId = safeTrim(form.get("coin_id"));
+
+    const fileEntry = form.get("file");
+    const bannerFile = fileEntry instanceof File ? fileEntry : null;
 
     if (!coinId) {
       return NextResponse.json({ error: "coin_id is required" }, { status: 400 });
-    }
-
-    if (!bannerPath) {
-      return NextResponse.json({ error: "banner_path is required" }, { status: 400 });
     }
 
     const now = new Date();
@@ -308,6 +351,18 @@ export async function POST(req: Request) {
         { error: "Golden Hour entry can no longer be changed after reveal" },
         { status: 400 }
       );
+    }
+
+    const existingEntry = await getEntry(wallet, targetDate);
+
+    let bannerPath = existingEntry?.banner_path ?? null;
+
+    if (bannerFile) {
+      bannerPath = await uploadGoldenHourBanner(wallet, targetDate, String(coin.id), bannerFile);
+    }
+
+    if (!bannerPath) {
+      return NextResponse.json({ error: "A banner is required" }, { status: 400 });
     }
 
     const payload = {
