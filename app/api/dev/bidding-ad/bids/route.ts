@@ -6,8 +6,8 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const ONE_SOL_LAMPORTS = 10_000_000;
-const MIN_BID_INCREMENT_LAMPORTS = ONE_SOL_LAMPORTS;
+const ONE_SOL_LAMPORTS = 1_000_000_000;
+const MIN_BID_INCREMENT_LAMPORTS = 10_000_000;
 const EXTENSION_WINDOW_MS = 30 * 1000;
 const MAX_EXTENSION_FROM_SCHEDULED_END_MS = 60 * 60 * 1000;
 
