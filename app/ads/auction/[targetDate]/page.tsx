@@ -19,6 +19,7 @@ type BiddingAdStatus = {
   pricing: {
     entryFeeSol: number;
     entryFeeLamports: number;
+    treasuryWallet?: string;
   };
   eligibility: {
     isEligible: boolean;
@@ -80,6 +81,7 @@ type BiddingAdStatus = {
     ad_starts_at: string;
     ad_ends_at: string;
     payment_confirmed_at: string | null;
+    payment_signature?: string | null;
     created_at: string;
   } | null;
   ownedCoins: Array<{
@@ -90,6 +92,13 @@ type BiddingAdStatus = {
     description: string | null;
     created_at: string;
   }>;
+  payment?: {
+    treasuryWallet?: string;
+    entryFeeSol?: number;
+    entryFeeLamports?: number;
+    entryConfirmed?: boolean;
+    kind?: string;
+  };
 };
 
 type BidRow = {
@@ -116,18 +125,18 @@ type BidsResponse = {
 type PaymentQueueRow = {
   id: string;
   auction_id: string;
-  target_date?: string;
+  target_date: string;
   entry_id: string;
   bid_id: string;
   bidder_wallet: string;
   amount_lamports: number;
   priority_rank: number;
-  status: "queued" | "awaiting_payment" | "paid" | "expired" | "skipped";
+  status: "queued" | "awaiting_payment" | "paid" | "skipped" | "expired";
   payment_due_at: string | null;
-  paid_at?: string | null;
-  skipped_at?: string | null;
-  created_at?: string;
-  updated_at?: string;
+  paid_at: string | null;
+  skipped_at: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 type PayStatusResponse = {
@@ -137,8 +146,11 @@ type PayStatusResponse = {
   queue: PaymentQueueRow[];
   me: PaymentQueueRow | null;
   payment: {
+    treasuryWallet: string;
     is_my_turn: boolean;
     can_pay: boolean;
+    amount_lamports: number | null;
+    amount_sol: number | null;
     payment_due_at: string | null;
     ms_remaining: number | null;
   };
@@ -382,7 +394,7 @@ export default function AuctionPage({
   const canPayWinnerNow = !!payData?.payment?.can_pay;
   const isMyTurnToPay = !!payData?.payment?.is_my_turn;
   const myQueueRow = payData?.me ?? null;
-  const winnerAmountLamports = Number(myQueueRow?.amount_lamports ?? 0);
+  const winnerAmountLamports = Number(payData?.payment?.amount_lamports ?? myQueueRow?.amount_lamports ?? 0);
 
   async function placeBid() {
     if (!targetDate) return;
@@ -437,7 +449,8 @@ export default function AuctionPage({
       return;
     }
 
-    if (!treasuryWallet) {
+    const payTreasuryWallet = payData?.payment?.treasuryWallet || treasuryWallet;
+    if (!payTreasuryWallet) {
       alert("Treasury wallet is not configured.");
       return;
     }
@@ -449,7 +462,7 @@ export default function AuctionPage({
 
     setWinnerPayBusy(true);
     try {
-      const treasuryPubkey = new PublicKey(treasuryWallet);
+      const treasuryPubkey = new PublicKey(payTreasuryWallet);
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
 
       const tx = new Transaction({
@@ -675,7 +688,7 @@ export default function AuctionPage({
                   <div className="mt-4 rounded-xl border border-cyan-400/20 bg-cyan-400/10 p-4">
                     <div className="text-sm font-semibold text-cyan-100">Your payment window is active</div>
                     <div className="mt-2 text-sm text-cyan-50">
-                      Amount due: <span className="font-semibold">{fmtSolFromLamports(myQueueRow.amount_lamports)}</span>
+                      Amount due: <span className="font-semibold">{fmtSolFromLamports(winnerAmountLamports)}</span>
                     </div>
                     <div className="mt-1 text-xs text-cyan-200">
                       Due by: {fmtDate(payData?.payment?.payment_due_at)}
@@ -691,9 +704,7 @@ export default function AuctionPage({
                       disabled={!canPayWinnerNow || winnerPayBusy}
                       className="mt-4 rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
                     >
-                      {winnerPayBusy
-                        ? "Paying…"
-                        : `Pay ${fmtSolFromLamports(myQueueRow.amount_lamports)}`}
+                      {winnerPayBusy ? "Paying…" : `Pay ${fmtSolFromLamports(winnerAmountLamports)}`}
                     </button>
                   </div>
                 ) : null}
