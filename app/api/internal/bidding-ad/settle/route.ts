@@ -1,10 +1,11 @@
+// app/api/internal/bidding-ad/settle/route.ts
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const PAYMENT_WINDOW_MS = 60 * 1000;
+const PAYMENT_WINDOW_MS = 45 * 1000;
 
 function startOfUtcDay(d: Date) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
@@ -25,9 +26,14 @@ function currentTargetDate(now = new Date()) {
 
 function adWindowForTargetDate(targetDate: string) {
   const day = new Date(`${targetDate}T00:00:00.000Z`);
+  const nextDay = addUtcDays(day, 1);
 
-  const adStartsAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 13, 0, 0, 0));
-  const adEndsAt = new Date(adStartsAt.getTime() + 23 * 60 * 60 * 1000);
+  const adStartsAt = new Date(
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 21, 0, 0, 0)
+  );
+  const adEndsAt = new Date(
+    Date.UTC(nextDay.getUTCFullYear(), nextDay.getUTCMonth(), nextDay.getUTCDate(), 20, 0, 0, 0)
+  );
 
   return {
     adStartsAt,
@@ -72,6 +78,9 @@ async function getWinner(auctionId: string) {
       "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, payment_signature, created_at"
     )
     .eq("auction_id", auctionId)
+    .not("payment_confirmed_at", "is", null)
+    .order("payment_confirmed_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
 
   if (error) throw new Error(error.message);
