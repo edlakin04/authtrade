@@ -83,10 +83,10 @@ function biddingAdScheduleForTargetDate(targetDate: string) {
     Date.UTC(prevDay.getUTCFullYear(), prevDay.getUTCMonth(), prevDay.getUTCDate(), 23, 0, 0, 0)
   );
   const auctionStartsAt = new Date(
-    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 23, 30, 0, 0)
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 19, 0, 0, 0)
   );
   const auctionEndsAt = new Date(
-    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 23, 55, 0, 0)
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 20, 0, 0, 0)
   );
 
   return {
@@ -330,7 +330,8 @@ export async function GET(req: Request) {
     const entryConfirmed = entry?.entry_payment_status === "paid";
     const entryOpen = now >= entryOpensAt && now < auctionStartsAt;
     const auctionLive = now >= auctionStartsAt && now < auctionEndsAt && auction.status === "live";
-    const auctionClosed = now >= auctionEndsAt || auction.status !== "scheduled" && auction.status !== "live";
+    const auctionClosed =
+      now >= auctionEndsAt || (auction.status !== "scheduled" && auction.status !== "live");
 
     const iWon = !!winner && winner.dev_wallet === wallet;
     const iLost = !!winner && winner.dev_wallet !== wallet;
