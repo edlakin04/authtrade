@@ -1,3 +1,4 @@
+// app/api/payments/confirm-bidding-winner/route.ts
 import { NextResponse } from "next/server";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { cookies } from "next/headers";
@@ -302,6 +303,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing signature" }, { status: 400 });
     }
 
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
+      return NextResponse.json({ error: "Invalid target_date" }, { status: 400 });
+    }
+
     const wallet = await getViewerWallet();
     if (!wallet) {
       return NextResponse.json({ error: "Not signed in" }, { status: 401 });
@@ -440,6 +445,11 @@ export async function POST(req: Request) {
 
     if (rowNow.status !== "awaiting_payment") {
       return NextResponse.json({ error: "Payment window is no longer active" }, { status: 400 });
+    }
+
+    const rowDueAtMs = rowNow.payment_due_at ? Date.parse(String(rowNow.payment_due_at)) : NaN;
+    if (!Number.isFinite(rowDueAtMs) || Date.now() > rowDueAtMs) {
+      return NextResponse.json({ error: "Your payment window has expired" }, { status: 400 });
     }
 
     const paidAtIso = new Date().toISOString();
