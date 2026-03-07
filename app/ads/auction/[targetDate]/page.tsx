@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import TopNav from "@/components/TopNav";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { Connection, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { Connection, Transaction } from "@solana/web3.js";
 
 type AuctionStatus = "scheduled" | "live" | "awaiting_payment" | "completed" | "rolled_over" | "cancelled";
 
@@ -53,6 +53,10 @@ type BiddingAdStatus = {
     auction_closed?: boolean;
     next_min_bid_lamports?: number;
     next_min_bid_sol?: number;
+    min_start_bid_lamports?: number;
+    min_start_bid_sol?: number;
+    min_bid_increment_lamports?: number;
+    min_bid_increment_sol?: number;
     extension_window_seconds?: number;
   };
   entry: {
@@ -84,6 +88,7 @@ type BiddingAdStatus = {
     ad_starts_at: string;
     ad_ends_at: string;
     payment_confirmed_at: string | null;
+    payment_signature?: string | null;
     created_at: string;
   } | null;
   ownedCoins: Array<{
@@ -159,6 +164,26 @@ type PayStatusResponse = {
   };
 };
 
+type WinnerPaymentTxResponse = {
+  ok?: true;
+  payment?: {
+    amount_lamports?: number;
+    amount_sol?: number;
+    treasuryWallet?: string;
+  };
+  tx?: {
+    serialized_base64?: string;
+    blockhash?: string;
+    lastValidBlockHeight?: number;
+  };
+  txBase64?: string;
+  tx_base64?: string;
+  transaction?: string;
+  transaction_base64?: string;
+  error?: string;
+  details?: string;
+};
+
 function shortAddr(s: string | null | undefined) {
   if (!s) return "—";
   return `${s.slice(0, 4)}…${s.slice(-4)}`;
@@ -197,6 +222,15 @@ function statusPillText(status: AuctionStatus) {
   return "Cancelled";
 }
 
+function decodeBase64ToUint8Array(base64: string) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
 export default function AuctionPage({
   params
 }: {
@@ -208,8 +242,6 @@ export default function AuctionPage({
     process.env.NEXT_PUBLIC_SOLANA_RPC_URL ||
     process.env.NEXT_PUBLIC_RPC_URL ||
     "https://api.mainnet-beta.solana.com";
-
-  const treasuryWallet = process.env.NEXT_PUBLIC_TREASURY_WALLET || "";
 
   const connection = useMemo(() => new Connection(rpcUrl, "confirmed"), [rpcUrl]);
 
@@ -348,6 +380,7 @@ export default function AuctionPage({
     const t = setInterval(() => {
       loadPayStatus(targetDate, true);
       loadPage(targetDate);
+      loadBids(targetDate, true);
     }, 5000);
 
     return () => clearInterval(t);
@@ -465,50 +498,64 @@ export default function AuctionPage({
       return;
     }
 
-    const treasury =
-      payData?.payment?.treasuryWallet || data?.pricing?.treasuryWallet || treasuryWallet;
-
-    if (!treasury) {
-      alert("Treasury wallet is not configured.");
-      return;
-    }
-
-    if (!Number.isFinite(winnerAmountLamports) || winnerAmountLamports <= 0) {
-      alert("Invalid winning payment amount.");
-      return;
-    }
-
     setWinnerPayBusy(true);
     try {
-      const treasuryPubkey = new PublicKey(treasury);
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-
-      const tx = new Transaction({
-        feePayer: publicKey,
-        recentBlockhash: blockhash
-      }).add(
-        SystemProgram.transfer({
-          fromPubkey: publicKey,
-          toPubkey: treasuryPubkey,
-          lamports: winnerAmountLamports
+      const buildRes = await fetch("/api/dev/bidding-ad/winner-payment-tx", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          target_date: targetDate
         })
-      );
+      });
+
+      const buildJson = (await buildRes.json().catch(() => ({}))) as WinnerPaymentTxResponse;
+
+      if (!buildRes.ok) {
+        throw new Error(buildJson?.error || buildJson?.details || "Failed to create winner payment transaction");
+      }
+
+      const txBase64 =
+        buildJson?.tx?.serialized_base64 ||
+        buildJson?.txBase64 ||
+        buildJson?.tx_base64 ||
+        buildJson?.transaction ||
+        buildJson?.transaction_base64 ||
+        "";
+
+      if (!txBase64) {
+        throw new Error("Winner payment transaction was not returned by the server.");
+      }
+
+      const txBytes = decodeBase64ToUint8Array(txBase64);
+      const tx = Transaction.from(txBytes);
 
       const signature = await sendTransaction(tx, connection, {
         skipPreflight: false,
         preflightCommitment: "confirmed"
       });
 
-      await connection.confirmTransaction(
-        {
-          signature,
-          blockhash,
-          lastValidBlockHeight
-        },
-        "confirmed"
-      );
+      if (buildJson?.tx?.blockhash && typeof buildJson?.tx?.lastValidBlockHeight === "number") {
+        try {
+          await connection.confirmTransaction(
+            {
+              signature,
+              blockhash: buildJson.tx.blockhash,
+              lastValidBlockHeight: buildJson.tx.lastValidBlockHeight
+            },
+            "confirmed"
+          );
+        } catch {
+          // Let the server do the real verification next.
+        }
+      } else {
+        try {
+          await connection.confirmTransaction(signature, "confirmed");
+        } catch {
+          // Let the server do the real verification next.
+        }
+      }
 
-      const res = await fetch("/api/payments/confirm-bidding-winner", {
+      const confirmRes = await fetch("/api/payments/confirm-bidding-winner", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -517,9 +564,9 @@ export default function AuctionPage({
         })
       });
 
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(json?.error ?? "Winner payment confirmation failed");
+      const confirmJson = await confirmRes.json().catch(() => ({}));
+      if (!confirmRes.ok) {
+        throw new Error(confirmJson?.error ?? "Winner payment confirmation failed");
       }
 
       await refreshAll(targetDate, true);
@@ -885,8 +932,8 @@ export default function AuctionPage({
 
                 {showStayMessage ? (
                   <div className="mt-4 rounded-xl border border-yellow-400/20 bg-yellow-400/10 p-4 text-sm text-yellow-100">
-                    Stay on this page for another 5–10 minutes in case the current winner fails to pay and the slot rolls
-                    down to the next bidder.
+                    Stay on this page while the payment queue runs. If the current winner does not pay in time, the
+                    next bidder gets the 45 second payment window.
                   </div>
                 ) : null}
 
