@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 const GOLDEN_HOUR_BUCKET = "golden-hour";
+const BIDDING_AD_BUCKET_CANDIDATES = ["bidding-ad-banners", "bidding_ads", "bidding-ad", "biddingad"];
 
 function expDecayWeight(ageHours: number, halfLifeHours = 6) {
   return Math.exp((-Math.LN2 * ageHours) / halfLifeHours);
@@ -49,6 +50,28 @@ type PollVoteRow = {
   created_at: string;
 };
 
+type DashboardAd = {
+  id: string;
+  kind: "golden_hour" | "paid_ad";
+  dev_wallet: string;
+  coin_id: string;
+  banner_url: string | null;
+  starts_at: string;
+  ends_at: string;
+  target_date: string;
+  coin: {
+    id: string;
+    wallet: string;
+    token_address: string;
+    title: string | null;
+    description: string | null;
+  } | null;
+  profile: {
+    wallet: string;
+    display_name: string | null;
+  } | null;
+};
+
 async function getViewerWallet(): Promise<string | null> {
   try {
     const cookieStore = await cookies();
@@ -56,6 +79,153 @@ async function getViewerWallet(): Promise<string | null> {
     if (!sessionToken) return null;
     const session = await readSessionToken(sessionToken).catch(() => null);
     return session?.wallet ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function createSignedUrlFromAnyBucket(
+  sb: ReturnType<typeof supabaseAdmin>,
+  path: string | null | undefined,
+  buckets: string[],
+  expiresInSeconds = 60 * 30
+) {
+  if (!path) return null;
+
+  for (const bucket of buckets) {
+    try {
+      const { data, error } = await sb.storage.from(bucket).createSignedUrl(path, expiresInSeconds);
+      if (!error && data?.signedUrl) return data.signedUrl;
+    } catch {
+      // ignore and try next bucket
+    }
+  }
+
+  return null;
+}
+
+async function getActiveGoldenHourAd(
+  sb: ReturnType<typeof supabaseAdmin>,
+  nowIso: string
+): Promise<DashboardAd | null> {
+  try {
+    const activeGoldenRes = await sb
+      .from("golden_hour_winners")
+      .select("id, target_date, dev_wallet, coin_id, banner_path, starts_at, ends_at")
+      .lte("starts_at", nowIso)
+      .gt("ends_at", nowIso)
+      .order("starts_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (activeGoldenRes.error || !activeGoldenRes.data) return null;
+
+    const gh = activeGoldenRes.data as any;
+
+    const [{ data: coin }, { data: profile }, bannerUrl] = await Promise.all([
+      sb
+        .from("coins")
+        .select("id, wallet, token_address, title, description")
+        .eq("id", gh.coin_id)
+        .maybeSingle(),
+      sb
+        .from("dev_profiles")
+        .select("wallet, display_name")
+        .eq("wallet", gh.dev_wallet)
+        .maybeSingle(),
+      createSignedUrlFromAnyBucket(sb, String(gh.banner_path), [GOLDEN_HOUR_BUCKET])
+    ]);
+
+    return {
+      id: String(gh.id),
+      kind: "golden_hour",
+      dev_wallet: String(gh.dev_wallet),
+      coin_id: String(gh.coin_id),
+      banner_url: bannerUrl,
+      starts_at: String(gh.starts_at),
+      ends_at: String(gh.ends_at),
+      target_date: String(gh.target_date),
+      coin: coin
+        ? {
+            id: String((coin as any).id),
+            wallet: String((coin as any).wallet),
+            token_address: String((coin as any).token_address),
+            title: (coin as any).title ?? null,
+            description: (coin as any).description ?? null
+          }
+        : null,
+      profile: profile
+        ? {
+            wallet: String((profile as any).wallet),
+            display_name: (profile as any).display_name ?? null
+          }
+        : null
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function getActivePaidAd(
+  sb: ReturnType<typeof supabaseAdmin>,
+  nowIso: string
+): Promise<DashboardAd | null> {
+  try {
+    const activePaidRes = await sb
+      .from("bidding_ad_winners")
+      .select(
+        "id, target_date, dev_wallet, coin_id, banner_path, ad_starts_at, ad_ends_at, payment_confirmed_at"
+      )
+      .not("payment_confirmed_at", "is", null)
+      .lte("ad_starts_at", nowIso)
+      .gt("ad_ends_at", nowIso)
+      .order("ad_starts_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (activePaidRes.error || !activePaidRes.data) return null;
+
+    const ad = activePaidRes.data as any;
+
+    const [{ data: coin }, { data: profile }, bannerUrl] = await Promise.all([
+      sb
+        .from("coins")
+        .select("id, wallet, token_address, title, description")
+        .eq("id", ad.coin_id)
+        .maybeSingle(),
+      sb
+        .from("dev_profiles")
+        .select("wallet, display_name")
+        .eq("wallet", ad.dev_wallet)
+        .maybeSingle(),
+      createSignedUrlFromAnyBucket(sb, String(ad.banner_path), BIDDING_AD_BUCKET_CANDIDATES)
+    ]);
+
+    return {
+      id: String(ad.id),
+      kind: "paid_ad",
+      dev_wallet: String(ad.dev_wallet),
+      coin_id: String(ad.coin_id),
+      banner_url: bannerUrl,
+      starts_at: String(ad.ad_starts_at),
+      ends_at: String(ad.ad_ends_at),
+      target_date: String(ad.target_date),
+      coin: coin
+        ? {
+            id: String((coin as any).id),
+            wallet: String((coin as any).wallet),
+            token_address: String((coin as any).token_address),
+            title: (coin as any).title ?? null,
+            description: (coin as any).description ?? null
+          }
+        : null,
+      profile: profile
+        ? {
+            wallet: String((profile as any).wallet),
+            display_name: (profile as any).display_name ?? null
+          }
+        : null
+    };
   } catch {
     return null;
   }
@@ -73,7 +243,6 @@ export async function GET() {
     const sinceCoins14d = new Date(now - 14 * DAY).toISOString();
     const sinceVotes48h = new Date(now - 48 * HOUR).toISOString();
 
-    // --- Load dev profiles (candidate pool) ---
     const profilesRes = await sb
       .from("dev_profiles")
       .select("wallet, display_name, bio, pfp_url, x_url, updated_at")
@@ -86,7 +255,6 @@ export async function GET() {
     const profiles = profilesRes.data ?? [];
     const devWallets = profiles.map((p) => p.wallet);
 
-    // --- Trending signals ---
     const followsRes = await sb
       .from("follows")
       .select("dev_wallet, created_at")
@@ -120,7 +288,6 @@ export async function GET() {
         .limit(20000);
     }
 
-    // --- Build maps ---
     const follows7d = new Map<string, number>();
     if (!followsRes.error) {
       for (const f of followsRes.data ?? []) {
@@ -150,7 +317,6 @@ export async function GET() {
       }
     }
 
-    // Coin traction: compute decayed vote score per coin, then sum per dev (cap)
     const coinToDev = new Map<string, string>();
     for (const c of coinsByDevRes.data ?? []) {
       coinToDev.set(String((c as any).id), String((c as any).wallet));
@@ -182,7 +348,6 @@ export async function GET() {
       devCoinScore.set(dev, Math.min(10, score));
     }
 
-    // --- Compute final dev trending score ---
     const scoredProfiles = profiles
       .map((p) => {
         const w = p.wallet;
@@ -203,7 +368,6 @@ export async function GET() {
         const review_score = Math.log1p(r14) * rating_adj;
 
         const coin_score = devCoinScore.get(w) ?? 0;
-
         const trending_score = follow_score + review_score + coin_score;
 
         return {
@@ -219,86 +383,13 @@ export async function GET() {
       .sort((a, b) => (b.trending_score ?? 0) - (a.trending_score ?? 0))
       .slice(0, 12);
 
-    // --- Golden Hour active ad ---
-    let goldenHourAd: {
-      id: string;
-      dev_wallet: string;
-      coin_id: string;
-      banner_url: string | null;
-      starts_at: string;
-      ends_at: string;
-      target_date: string;
-      coin: {
-        id: string;
-        wallet: string;
-        token_address: string;
-        title: string | null;
-        description: string | null;
-      } | null;
-      profile: {
-        wallet: string;
-        display_name: string | null;
-      } | null;
-    } | null = null;
+    const [goldenHourAd, paidAd] = await Promise.all([
+      getActiveGoldenHourAd(sb, nowIso),
+      getActivePaidAd(sb, nowIso)
+    ]);
 
-    try {
-      const activeGoldenRes = await sb
-        .from("golden_hour_winners")
-        .select("id, target_date, dev_wallet, coin_id, banner_path, starts_at, ends_at")
-        .lte("starts_at", nowIso)
-        .gt("ends_at", nowIso)
-        .order("starts_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+    const activeAd = goldenHourAd ?? paidAd ?? null;
 
-      if (!activeGoldenRes.error && activeGoldenRes.data) {
-        const gh = activeGoldenRes.data as any;
-
-        const [{ data: coin }, { data: profile }, bannerRes] = await Promise.all([
-          sb
-            .from("coins")
-            .select("id, wallet, token_address, title, description")
-            .eq("id", gh.coin_id)
-            .maybeSingle(),
-          sb
-            .from("dev_profiles")
-            .select("wallet, display_name")
-            .eq("wallet", gh.dev_wallet)
-            .maybeSingle(),
-          sb.storage.from(GOLDEN_HOUR_BUCKET).createSignedUrl(String(gh.banner_path), 60 * 30)
-        ]);
-
-        goldenHourAd = {
-          id: String(gh.id),
-          dev_wallet: String(gh.dev_wallet),
-          coin_id: String(gh.coin_id),
-          banner_url: bannerRes.error ? null : bannerRes.data?.signedUrl ?? null,
-          starts_at: String(gh.starts_at),
-          ends_at: String(gh.ends_at),
-          target_date: String(gh.target_date),
-          coin: coin
-            ? {
-                id: String((coin as any).id),
-                wallet: String((coin as any).wallet),
-                token_address: String((coin as any).token_address),
-                title: (coin as any).title ?? null,
-                description: (coin as any).description ?? null
-              }
-            : null,
-          profile: profile
-            ? {
-                wallet: String((profile as any).wallet),
-                display_name: (profile as any).display_name ?? null
-              }
-            : null
-        };
-      }
-    } catch {
-      goldenHourAd = null;
-    }
-
-    // --- Posts + coins ---
-    // IMPORTANT: include poll_id so we can hydrate polls
     const postsRes = await sb
       .from("dev_posts")
       .select("id, wallet, content, image_path, poll_id, created_at")
@@ -314,7 +405,6 @@ export async function GET() {
     if (postsRes.error) return NextResponse.json({ error: postsRes.error.message }, { status: 500 });
     if (coinsRes.error) return NextResponse.json({ error: coinsRes.error.message }, { status: 500 });
 
-    // ✅ sign post images
     const bucketCandidates = ["dev_posts", "dev-posts", "posts", "devposts", "community"];
 
     async function signFromAnyBucket(path?: string | null) {
@@ -341,7 +431,6 @@ export async function GET() {
       })
     );
 
-    // ✅ Hydrate polls using dev_posts.poll_id -> dev_post_polls.id
     const viewerWallet = await getViewerWallet();
 
     const pollIds = Array.from(
@@ -351,10 +440,9 @@ export async function GET() {
     const pollById = new Map<string, PollRow>();
     const optionsByPollId = new Map<string, PollOptionRow[]>();
     const countsByPollId = new Map<string, Map<string, number>>();
-    const viewerVoteByPollId = new Map<string, string | null>(); // option_id
+    const viewerVoteByPollId = new Map<string, string | null>();
 
     if (pollIds.length) {
-      // polls
       const pollsRes = await sb
         .from("dev_post_polls")
         .select("id, wallet, question, created_at")
@@ -364,7 +452,6 @@ export async function GET() {
         for (const p of (pollsRes.data ?? []) as PollRow[]) pollById.set(String(p.id), p);
       }
 
-      // options
       const optsRes = await sb
         .from("dev_post_poll_options")
         .select("id, poll_id, label, sort_order, created_at")
@@ -379,7 +466,6 @@ export async function GET() {
         }
       }
 
-      // votes (aggregate)
       const votesRes = await sb
         .from("dev_post_poll_votes")
         .select("poll_id, option_id, voter_wallet, created_at")
@@ -417,7 +503,6 @@ export async function GET() {
         content: p.content,
         created_at: p.created_at,
         image_url: signedUrlById.get(String(p.id)) ?? null,
-        // ✅ This is what your UI needs to render the actual poll
         poll:
           pollRow && optionRows.length
             ? {
@@ -436,7 +521,8 @@ export async function GET() {
 
     return NextResponse.json({
       ok: true,
-      goldenHourAd,
+      goldenHourAd: activeAd,
+      adKind: activeAd?.kind ?? null,
       profiles: scoredProfiles,
       posts,
       coins: coinsRes.data ?? []
