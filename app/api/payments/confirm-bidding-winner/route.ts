@@ -29,11 +29,14 @@ function currentTargetDate(now = new Date()) {
 
 function adWindowForTargetDate(targetDate: string) {
   const day = new Date(`${targetDate}T00:00:00.000Z`);
+  const nextDay = addUtcDays(day, 1);
 
   const adStartsAt = new Date(
-    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 13, 0, 0, 0)
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 21, 0, 0, 0)
   );
-  const adEndsAt = new Date(adStartsAt.getTime() + 23 * 60 * 60 * 1000);
+  const adEndsAt = new Date(
+    Date.UTC(nextDay.getUTCFullYear(), nextDay.getUTCMonth(), nextDay.getUTCDate(), 20, 0, 0, 0)
+  );
 
   return {
     adStartsAt,
