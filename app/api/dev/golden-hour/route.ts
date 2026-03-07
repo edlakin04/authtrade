@@ -39,9 +39,9 @@ function extFromType(type: string) {
 
 // Golden Hour timing model for a target day:
 // - opt-in opens at previous day 00:00 UTC
-// - reveal at target day 11:00 UTC
-// - starts at target day 12:00 UTC
-// - ends at target day 13:00 UTC
+// - reveal at target day 19:55 UTC
+// - starts at target day 20:00 UTC
+// - ends at target day 21:00 UTC
 function scheduleForTargetDate(targetDate: string) {
   const day = new Date(`${targetDate}T00:00:00.000Z`);
   const prevDay = addUtcDays(day, -1);
@@ -49,9 +49,9 @@ function scheduleForTargetDate(targetDate: string) {
   const optInOpensAt = new Date(
     Date.UTC(prevDay.getUTCFullYear(), prevDay.getUTCMonth(), prevDay.getUTCDate(), 0, 0, 0, 0)
   );
-  const revealAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 11, 0, 0, 0));
-  const startsAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 12, 0, 0, 0));
-  const endsAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 13, 0, 0, 0));
+  const revealAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 19, 55, 0, 0));
+  const startsAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 20, 0, 0, 0));
+  const endsAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 21, 0, 0, 0));
 
   return {
     optInOpensAt,
@@ -328,7 +328,6 @@ export async function POST(req: Request) {
 
     const sb = supabaseAdmin();
 
-    // Verify coin belongs to this dev
     const { data: coin, error: coinErr } = await sb
       .from("coins")
       .select("id, wallet, token_address, title")
@@ -344,7 +343,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Selected coin not found" }, { status: 400 });
     }
 
-    // Prevent edits after reveal if winner already exists and reveal is live
     const winner = await getWinner(targetDate);
     if (winner && now >= new Date(winner.reveal_at)) {
       return NextResponse.json(
