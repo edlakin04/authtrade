@@ -72,7 +72,16 @@ function toDateOnlyUtc(d: Date) {
 
 function currentTargetDate(now = new Date()) {
   const todayUtc = startOfUtcDay(now);
-  return toDateOnlyUtc(todayUtc);
+  const todayTarget = toDateOnlyUtc(todayUtc);
+
+  // Entry for today's auction closes when the auction starts at 7pm UTC.
+  // If we're past that, show tomorrow's auction instead.
+  const todaySchedule = biddingAdScheduleForTargetDate(todayTarget);
+  if (now >= todaySchedule.auctionStartsAt) {
+    return toDateOnlyUtc(addUtcDays(todayUtc, 1));
+  }
+
+  return todayTarget;
 }
 
 function biddingAdScheduleForTargetDate(targetDate: string) {
