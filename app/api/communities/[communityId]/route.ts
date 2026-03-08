@@ -33,7 +33,7 @@ export async function GET(req: Request) {
 
     const { data: comm, error: commErr } = await sb
       .from("coin_communities")
-      .select("id, coin_id, dev_wallet, title, created_at")
+      .select("id, coin_id, dev_wallet, title, created_at, pinned_message_id")
       .eq("id", communityId)
       .maybeSingle();
 
@@ -247,6 +247,71 @@ export async function GET(req: Request) {
         }
       : null;
 
+    // Hydrate pinned message if one is set
+    let pinnedMessage: any = null;
+    const pinnedMessageId = (comm as any).pinned_message_id ?? null;
+
+    if (pinnedMessageId) {
+      // Check if it's already in the current message page
+      const found = messages.find((m: any) => m.id === pinnedMessageId) ?? null;
+
+      if (found) {
+        pinnedMessage = found;
+      } else {
+        // Fetch it separately — it may be outside the current page
+        const { data: pinnedRaw } = await sb
+          .from("community_messages")
+          .select("id, community_id, author_wallet, content, image_path, poll_id, created_at")
+          .eq("id", pinnedMessageId)
+          .maybeSingle();
+
+        if (pinnedRaw) {
+          const up = await sb
+            .from("user_profiles")
+            .select("wallet, display_name, pfp_path")
+            .eq("wallet", pinnedRaw.author_wallet)
+            .maybeSingle();
+
+          const dp = await sb
+            .from("dev_profiles")
+            .select("wallet, display_name, pfp_path")
+            .eq("wallet", pinnedRaw.author_wallet)
+            .maybeSingle();
+
+          const authorName = up.data?.display_name || dp.data?.display_name || null;
+          const isDev = pinnedRaw.author_wallet === comm.dev_wallet;
+
+          let avatarUrl: string | null = null;
+          if (up.data?.pfp_path) {
+            const { data: su } = await sb.storage.from("userpfp").createSignedUrl(up.data.pfp_path, 60 * 30);
+            avatarUrl = su?.signedUrl ?? null;
+          } else if (dp.data?.pfp_path) {
+            const { data: sd } = await sb.storage.from("pfp").createSignedUrl(dp.data.pfp_path, 60 * 30);
+            avatarUrl = sd?.signedUrl ?? null;
+          }
+
+          let imageUrl: string | null = null;
+          if (pinnedRaw.image_path) {
+            const { data: si } = await sb.storage.from("community").createSignedUrl(pinnedRaw.image_path, 60 * 30);
+            imageUrl = si?.signedUrl ?? null;
+          }
+
+          pinnedMessage = {
+            id: pinnedRaw.id,
+            community_id: pinnedRaw.community_id,
+            author_wallet: pinnedRaw.author_wallet,
+            author_name: authorName,
+            author_pfp_url: avatarUrl,
+            is_dev: isDev,
+            text: pinnedRaw.content ?? null,
+            image_url: imageUrl,
+            poll: null,
+            created_at: pinnedRaw.created_at
+          };
+        }
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       community: {
@@ -256,7 +321,8 @@ export async function GET(req: Request) {
       },
       coin,
       messages,
-      nextCursor
+      nextCursor,
+      pinnedMessage
     });
   } catch (e: any) {
     return NextResponse.json(
