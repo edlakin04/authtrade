@@ -1566,14 +1566,14 @@ export default function DevProfilePage() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              {biddingAdHasEntered ? (
-                <Link
-                  href={`/ads/auction/${encodeURIComponent(biddingAd?.targetDate ?? "")}`}
-                  className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200"
-                >
-                  Go to auction
-                </Link>
-              ) : null}
+              {(biddingAdState === "entered" || biddingAdState === "auction_live" || biddingAdState === "won") ? (
+  <Link
+    href={`/ads/auction/${encodeURIComponent(biddingAd?.targetDate ?? "")}`}
+    className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200"
+  >
+    Go to auction
+  </Link>
+) : null}
 
               <button
                 type="button"
@@ -1584,16 +1584,16 @@ export default function DevProfilePage() {
                 {biddingAdLoading ? "Loading…" : biddingAdCanEnter ? "Enter Bidding Ad" : "Bidding Ad"}
               </button>
 
-              {biddingAdHasEntered ? (
-                <button
-                  type="button"
-                  onClick={removeBiddingAdEntry}
-                  disabled={biddingAdDeleteBusy}
-                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-60"
-                >
-                  {biddingAdDeleteBusy ? "Removing…" : "Remove entry"}
-                </button>
-              ) : null}
+              {biddingAdState === "entered" ? (
+  <button
+    type="button"
+    onClick={removeBiddingAdEntry}
+    disabled={biddingAdDeleteBusy}
+    className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-60"
+  >
+    {biddingAdDeleteBusy ? "Removing…" : "Remove entry"}
+  </button>
+) : null}
             </div>
           </div>
 
