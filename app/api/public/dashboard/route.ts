@@ -7,8 +7,8 @@ export const dynamic = "force-dynamic";
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
-const GOLDEN_HOUR_BUCKET = "golden-hour";
-const BIDDING_AD_BUCKET_CANDIDATES = ["bidding-ad-banners", "bidding_ads", "bidding-ad", "biddingad"];
+const GOLDEN_HOUR_BUCKET = "golden-hour-banners";
+const BIDDING_AD_BUCKET_CANDIDATES = ["bidding-ad-banners"];
 
 function expDecayWeight(ageHours: number, halfLifeHours = 6) {
   return Math.exp((-Math.LN2 * ageHours) / halfLifeHours);
