@@ -30,11 +30,7 @@ function toDateOnlyUtc(d: Date) {
 
 function currentTargetDate(now = new Date()) {
   const todayUtc = startOfUtcDay(now);
-  return toDateOnlyUtc(addUtcDays(todayUtc, 1));
-}
-
-function isExpiredSignatureMarker(value: string | null | undefined) {
-  return typeof value === "string" && value.startsWith("EXPIRED:");
+  return toDateOnlyUtc(todayUtc);
 }
 
 function getTreasuryWallet() {
@@ -75,7 +71,7 @@ async function requireDev(wallet: string) {
   return role === "dev" || role === "admin";
 }
 
-async function getOrCreateAuction(targetDate: string) {
+async function getAuction(targetDate: string) {
   const sb = supabaseAdmin();
 
   const { data, error } = await sb
@@ -87,23 +83,22 @@ async function getOrCreateAuction(targetDate: string) {
     .maybeSingle();
 
   if (error) throw new Error(error.message);
-  if (!data) {
-    throw new Error("Auction not found for target date");
-  }
-
+  if (!data) throw new Error("Auction not found for target date");
   return data;
 }
 
-async function getLatestWinnerAttempt(auctionId: string) {
+// Use the payment queue as the source of truth — same as confirm-bidding-winner
+async function getCurrentQueueRow(auctionId: string) {
   const sb = supabaseAdmin();
 
   const { data, error } = await sb
-    .from("bidding_ad_winners")
+    .from("bidding_ad_payment_queue")
     .select(
-      "id, auction_id, target_date, entry_id, bid_id, dev_wallet, coin_id, banner_path, amount_lamports, ad_starts_at, ad_ends_at, payment_confirmed_at, payment_signature, created_at"
+      "id, auction_id, target_date, entry_id, bid_id, bidder_wallet, amount_lamports, priority_rank, status, payment_due_at, paid_at, skipped_at, created_at, updated_at"
     )
     .eq("auction_id", auctionId)
-    .order("created_at", { ascending: false })
+    .eq("status", "awaiting_payment")
+    .order("priority_rank", { ascending: true })
     .limit(1)
     .maybeSingle();
 
@@ -129,38 +124,37 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid target_date" }, { status: 400 });
     }
 
-    const auction = await getOrCreateAuction(targetDate);
+    const auction = await getAuction(targetDate);
 
-    if (auction.status !== "awaiting_payment") {
+    // Allow both awaiting_payment and completed — the queue row is the real source
+    // of truth, not the auction status, which can move to completed slightly early
+    if (auction.status !== "awaiting_payment" && auction.status !== "completed") {
       return NextResponse.json({ error: "Winner payment is not active right now" }, { status: 400 });
     }
 
-    const winner = await getLatestWinnerAttempt(String(auction.id));
-    if (!winner) {
-      return NextResponse.json({ error: "No active winner found" }, { status: 404 });
+    // Look up the current queue row — this is the single source of truth for
+    // who is currently allowed to pay, matching confirm-bidding-winner exactly
+    const queueRow = await getCurrentQueueRow(String(auction.id));
+    if (!queueRow) {
+      return NextResponse.json({ error: "No active payment window found" }, { status: 404 });
     }
 
-    if (winner.dev_wallet !== wallet) {
-      return NextResponse.json({ error: "You are not the current winner" }, { status: 403 });
+    if (String(queueRow.bidder_wallet) !== wallet) {
+      return NextResponse.json({ error: "It is not your turn to pay" }, { status: 403 });
     }
 
-    if (winner.payment_confirmed_at) {
-      return NextResponse.json({ error: "Winner payment already completed" }, { status: 400 });
+    const dueAtMs = queueRow.payment_due_at ? Date.parse(String(queueRow.payment_due_at)) : NaN;
+
+    if (!Number.isFinite(dueAtMs)) {
+      return NextResponse.json({ error: "Payment due time is missing" }, { status: 400 });
     }
 
-    if (isExpiredSignatureMarker(winner.payment_signature)) {
-      return NextResponse.json({ error: "Winner payment window has expired" }, { status: 400 });
-    }
-
-    const createdMs = new Date(String(winner.created_at)).getTime();
-    const dueMs = createdMs + WINNER_PAYMENT_WINDOW_MS;
     const nowMs = Date.now();
-
-    if (nowMs >= dueMs) {
-      return NextResponse.json({ error: "Winner payment window has expired" }, { status: 400 });
+    if (nowMs >= dueAtMs) {
+      return NextResponse.json({ error: "Your payment window has expired" }, { status: 400 });
     }
 
-    const lamports = Number(winner.amount_lamports ?? 0);
+    const lamports = Number(queueRow.amount_lamports ?? 0);
     if (!Number.isFinite(lamports) || lamports <= 0) {
       return NextResponse.json({ error: "Invalid winner payment amount" }, { status: 400 });
     }
@@ -198,12 +192,12 @@ export async function POST(req: Request) {
       ok: true,
       targetDate,
       winner: {
-        id: String(winner.id),
-        bid_id: String(winner.bid_id),
+        id: String(queueRow.id),
+        bid_id: String(queueRow.bid_id),
         amount_lamports: lamports,
         amount_sol: lamports / 1_000_000_000,
-        payment_due_at: new Date(dueMs).toISOString(),
-        payment_seconds_remaining: Math.max(0, Math.ceil((dueMs - nowMs) / 1000))
+        payment_due_at: new Date(dueAtMs).toISOString(),
+        payment_seconds_remaining: Math.max(0, Math.ceil((dueAtMs - nowMs) / 1000))
       },
       payment: {
         treasuryWallet,
