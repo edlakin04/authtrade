@@ -48,6 +48,7 @@ type NameMap = Record<string, string>; // wallet -> display_name
 type PfpMap = Record<string, string | null>; // wallet -> signed pfp url (or null)
 
 type GoldenHourAd = {
+  kind: "golden_hour" | "paid_ad";
   id: string;
   dev_wallet: string;
   coin_id: string;
@@ -457,7 +458,7 @@ export default function DashboardPage() {
           <section className="mt-6">
             <Link
               href={`/coin/${encodeURIComponent(goldenHourAd.coin.id)}`}
-              className="block overflow-hidden rounded-2xl border border-yellow-400/20 bg-black/30 hover:bg-black/40 transition"
+              className={goldenHourAd.kind === "paid_ad" ? "block overflow-hidden rounded-2xl border border-cyan-400/20 bg-black/30 hover:bg-black/40 transition" : "block overflow-hidden rounded-2xl border border-yellow-400/20 bg-black/30 hover:bg-black/40 transition"}
             >
               <div className="relative">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -467,8 +468,8 @@ export default function DashboardPage() {
                   className="h-40 w-full object-cover sm:h-52"
                 />
 
-                <div className="absolute left-3 top-3 rounded-full border border-yellow-300/30 bg-black/60 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-yellow-200">
-                  Golden Hour
+                <div className={goldenHourAd.kind === "paid_ad" ? "absolute left-3 top-3 rounded-full border border-cyan-300/30 bg-black/60 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-cyan-200" : "absolute left-3 top-3 rounded-full border border-yellow-300/30 bg-black/60 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-yellow-200"}>
+                  {goldenHourAd.kind === "paid_ad" ? "Sponsored" : "Golden Hour"}
                 </div>
 
                 <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-4 sm:p-5">
