@@ -22,9 +22,10 @@ function toDateOnlyUtc(d: Date) {
   return d.toISOString().slice(0, 10);
 }
 
+// Settle cron runs at 8:05pm so the auction being settled is TODAY, not tomorrow
 function currentTargetDate(now = new Date()) {
   const todayUtc = startOfUtcDay(now);
-  return toDateOnlyUtc(addUtcDays(todayUtc, 1));
+  return toDateOnlyUtc(todayUtc);
 }
 
 function adWindowForTargetDate(targetDate: string) {
@@ -38,10 +39,7 @@ function adWindowForTargetDate(targetDate: string) {
     Date.UTC(nextDay.getUTCFullYear(), nextDay.getUTCMonth(), nextDay.getUTCDate(), 20, 0, 0, 0)
   );
 
-  return {
-    adStartsAt,
-    adEndsAt
-  };
+  return { adStartsAt, adEndsAt };
 }
 
 function getTreasuryWallet() {
@@ -175,15 +173,32 @@ async function getEntry(entryId: string) {
   return data ?? null;
 }
 
+// Find the highest paid bid entry for this wallet in this auction — used as
+// fallback if the queue doesn't exist (e.g. resolveWinnerState bypassed it)
+async function getHighestBidEntryForWallet(auctionId: string, wallet: string) {
+  const sb = supabaseAdmin();
+
+  const { data, error } = await sb
+    .from("bidding_ad_bids")
+    .select(
+      "id, auction_id, target_date, entry_id, bidder_wallet, amount_lamports, placed_at, created_at"
+    )
+    .eq("auction_id", auctionId)
+    .eq("bidder_wallet", wallet)
+    .order("amount_lamports", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  return data ?? null;
+}
+
 async function markQueueRowPaid(rowId: string, paidAtIso: string) {
   const sb = supabaseAdmin();
 
   const { data, error } = await sb
     .from("bidding_ad_payment_queue")
-    .update({
-      status: "paid",
-      paid_at: paidAtIso
-    })
+    .update({ status: "paid", paid_at: paidAtIso })
     .eq("id", rowId)
     .select(
       "id, auction_id, target_date, entry_id, bid_id, bidder_wallet, amount_lamports, priority_rank, status, payment_due_at, paid_at, skipped_at, created_at, updated_at"
@@ -219,6 +234,7 @@ async function createWinner(params: {
   paidAtIso: string;
   signature: string;
 }) {
+  // Never create a duplicate winner row for the same auction
   const existing = await getWinnerByAuctionId(params.auctionId);
   if (existing) return existing;
 
@@ -326,6 +342,7 @@ export async function POST(req: Request) {
 
     const treasuryWallet = getTreasuryWallet();
 
+    // If this signature was already used to confirm a winner, return success immediately
     const winnerBySig = await getWinnerByPaymentSignature(signature);
     if (winnerBySig) {
       const auctionForWinner = await getAuction(String(winnerBySig.target_date));
@@ -350,6 +367,7 @@ export async function POST(req: Request) {
       );
     }
 
+    // If a winner already exists and has paid, just return success
     const existingWinner = await getWinnerByAuctionId(String(auction.id));
     if (existingWinner?.payment_confirmed_at) {
       return NextResponse.json({
@@ -361,27 +379,7 @@ export async function POST(req: Request) {
       });
     }
 
-    const currentRow = await getCurrentAwaitingPaymentRow(String(auction.id));
-    if (!currentRow) {
-      return NextResponse.json(
-        { error: "There is no active payment window right now" },
-        { status: 400 }
-      );
-    }
-
-    if (String(currentRow.bidder_wallet) !== wallet) {
-      return NextResponse.json({ error: "It is not your turn to pay" }, { status: 403 });
-    }
-
-    const dueAtMs = currentRow.payment_due_at ? Date.parse(String(currentRow.payment_due_at)) : NaN;
-    if (!Number.isFinite(dueAtMs)) {
-      return NextResponse.json({ error: "Payment due time is missing" }, { status: 400 });
-    }
-
-    if (Date.now() > dueAtMs) {
-      return NextResponse.json({ error: "Your payment window has expired" }, { status: 400 });
-    }
-
+    // ── Verify the on-chain transaction ──────────────────────────────────────
     const connection = new Connection(rpcUrl, "confirmed");
     const tx = await connection.getTransaction(signature, {
       commitment: "confirmed",
@@ -415,10 +413,113 @@ export async function POST(req: Request) {
     const preLamports = tx.meta.preBalances[treasuryIndex] ?? 0;
     const postLamports = tx.meta.postBalances[treasuryIndex] ?? 0;
     const deltaLamports = postLamports - preLamports;
-    const expectedLamports = Number(currentRow.amount_lamports) || 0;
 
+    // ── Try queue-based path first ────────────────────────────────────────────
+    const currentRow = await getCurrentAwaitingPaymentRow(String(auction.id));
+
+    if (currentRow) {
+      // Queue exists — validate it's this wallet's turn
+      if (String(currentRow.bidder_wallet) !== wallet) {
+        return NextResponse.json({ error: "It is not your turn to pay" }, { status: 403 });
+      }
+
+      const dueAtMs = currentRow.payment_due_at
+        ? Date.parse(String(currentRow.payment_due_at))
+        : NaN;
+
+      if (!Number.isFinite(dueAtMs)) {
+        return NextResponse.json({ error: "Payment due time is missing" }, { status: 400 });
+      }
+
+      if (Date.now() > dueAtMs) {
+        return NextResponse.json({ error: "Your payment window has expired" }, { status: 400 });
+      }
+
+      const expectedLamports = Number(currentRow.amount_lamports) || 0;
+      if (!Number.isFinite(expectedLamports) || expectedLamports <= 0) {
+        return NextResponse.json({ error: "Winning amount is invalid" }, { status: 400 });
+      }
+
+      if (deltaLamports < expectedLamports) {
+        return NextResponse.json(
+          {
+            error: `Winning payment too low. Expected ${expectedLamports} lamports, received ${deltaLamports} lamports`
+          },
+          { status: 400 }
+        );
+      }
+
+      // Re-fetch to guard against race conditions
+      const rowNow = await getQueueRowById(String(currentRow.id));
+      if (!rowNow) {
+        return NextResponse.json({ error: "Payment queue row no longer exists" }, { status: 400 });
+      }
+
+      if (rowNow.status === "paid") {
+        const winner = await getWinnerByAuctionId(String(auction.id));
+        return NextResponse.json({
+          ok: true,
+          auction,
+          winner,
+          queue: await getQueue(String(auction.id)),
+          message: "Winning payment already confirmed"
+        });
+      }
+
+      if (rowNow.status !== "awaiting_payment") {
+        return NextResponse.json({ error: "Payment window is no longer active" }, { status: 400 });
+      }
+
+      const rowDueAtMs = rowNow.payment_due_at ? Date.parse(String(rowNow.payment_due_at)) : NaN;
+      if (!Number.isFinite(rowDueAtMs) || Date.now() > rowDueAtMs) {
+        return NextResponse.json({ error: "Your payment window has expired" }, { status: 400 });
+      }
+
+      const paidAtIso = new Date().toISOString();
+      const paidRow = await markQueueRowPaid(String(rowNow.id), paidAtIso);
+
+      await recordPayment({
+        signature,
+        wallet,
+        amountSol: deltaLamports / 1_000_000_000,
+        targetDate
+      });
+
+      const winner = await createWinner({
+        auctionId: String(auction.id),
+        targetDate,
+        entryId: String(paidRow.entry_id),
+        bidId: String(paidRow.bid_id),
+        amountLamports: Number(paidRow.amount_lamports) || 0,
+        paidAtIso,
+        signature
+      });
+
+      const updatedAuction = await markAuctionCompleted(String(auction.id));
+      const queue = await getQueue(String(auction.id));
+
+      return NextResponse.json({
+        ok: true,
+        auction: updatedAuction,
+        winner,
+        queue,
+        payment: { paid: true, paid_at: paidAtIso, signature }
+      });
+    }
+
+    // ── Fallback: queue row missing (resolveWinnerState bypassed the queue) ──
+    // Check if this wallet was the highest bidder and verify the amount matches
+    const highestBid = await getHighestBidEntryForWallet(String(auction.id), wallet);
+    if (!highestBid) {
+      return NextResponse.json(
+        { error: "No active payment window found and no bid on record for your wallet" },
+        { status: 400 }
+      );
+    }
+
+    const expectedLamports = Number(highestBid.amount_lamports) || 0;
     if (!Number.isFinite(expectedLamports) || expectedLamports <= 0) {
-      return NextResponse.json({ error: "Winning amount is invalid" }, { status: 400 });
+      return NextResponse.json({ error: "Bid amount is invalid" }, { status: 400 });
     }
 
     if (deltaLamports < expectedLamports) {
@@ -430,33 +531,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const rowNow = await getQueueRowById(String(currentRow.id));
-    if (!rowNow) {
-      return NextResponse.json({ error: "Payment queue row no longer exists" }, { status: 400 });
-    }
-
-    if (rowNow.status === "paid") {
-      const winner = await getWinnerByAuctionId(String(auction.id));
-      return NextResponse.json({
-        ok: true,
-        auction,
-        winner,
-        queue: await getQueue(String(auction.id)),
-        message: "Winning payment already confirmed"
-      });
-    }
-
-    if (rowNow.status !== "awaiting_payment") {
-      return NextResponse.json({ error: "Payment window is no longer active" }, { status: 400 });
-    }
-
-    const rowDueAtMs = rowNow.payment_due_at ? Date.parse(String(rowNow.payment_due_at)) : NaN;
-    if (!Number.isFinite(rowDueAtMs) || Date.now() > rowDueAtMs) {
-      return NextResponse.json({ error: "Your payment window has expired" }, { status: 400 });
-    }
-
     const paidAtIso = new Date().toISOString();
-    const paidRow = await markQueueRowPaid(String(rowNow.id), paidAtIso);
 
     await recordPayment({
       signature,
@@ -468,9 +543,9 @@ export async function POST(req: Request) {
     const winner = await createWinner({
       auctionId: String(auction.id),
       targetDate,
-      entryId: String(paidRow.entry_id),
-      bidId: String(paidRow.bid_id),
-      amountLamports: Number(paidRow.amount_lamports) || 0,
+      entryId: String(highestBid.entry_id),
+      bidId: String(highestBid.id),
+      amountLamports: Number(highestBid.amount_lamports) || 0,
       paidAtIso,
       signature
     });
@@ -483,11 +558,7 @@ export async function POST(req: Request) {
       auction: updatedAuction,
       winner,
       queue,
-      payment: {
-        paid: true,
-        paid_at: paidAtIso,
-        signature
-      }
+      payment: { paid: true, paid_at: paidAtIso, signature }
     });
   } catch (e: any) {
     console.error("confirm-bidding-winner error:", e);
