@@ -20,8 +20,9 @@ function toDateOnlyUtc(d: Date) {
 }
 
 function currentTargetDate(now = new Date()) {
+  // settle runs at 8:05pm so target date is today (the auction was for today)
   const todayUtc = startOfUtcDay(now);
-  return toDateOnlyUtc(addUtcDays(todayUtc, 1));
+  return toDateOnlyUtc(todayUtc);
 }
 
 function adWindowForTargetDate(targetDate: string) {
@@ -35,19 +36,17 @@ function adWindowForTargetDate(targetDate: string) {
     Date.UTC(nextDay.getUTCFullYear(), nextDay.getUTCMonth(), nextDay.getUTCDate(), 20, 0, 0, 0)
   );
 
-  return {
-    adStartsAt,
-    adEndsAt
-  };
+  return { adStartsAt, adEndsAt };
 }
 
 function getInternalSecretOk(req: Request) {
   const expected = process.env.INTERNAL_CRON_SECRET || process.env.CRON_SECRET || "";
+
+  // If no secret is configured, allow through (dev environment)
   if (!expected) return true;
 
   const got = req.headers.get("x-internal-secret") || req.headers.get("authorization") || "";
   if (!got) return false;
-
   if (got === expected) return true;
   if (got === `Bearer ${expected}`) return true;
 
@@ -69,7 +68,7 @@ async function getAuction(targetDate: string) {
   return data ?? null;
 }
 
-async function getWinner(auctionId: string) {
+async function getConfirmedWinner(auctionId: string) {
   const sb = supabaseAdmin();
 
   const { data, error } = await sb
@@ -161,8 +160,11 @@ async function getOrderedValidBids(auctionId: string) {
 
   const rows = (data ?? []) as any[];
 
+  // Only include bids from devs who actually paid the entry fee
   return rows.filter((row) => {
-    const entry = Array.isArray(row.bidding_ad_entries) ? row.bidding_ad_entries[0] : row.bidding_ad_entries;
+    const entry = Array.isArray(row.bidding_ad_entries)
+      ? row.bidding_ad_entries[0]
+      : row.bidding_ad_entries;
     if (!entry) return false;
     return entry.entry_payment_status === "paid";
   });
@@ -173,12 +175,11 @@ async function buildQueueIfMissing(auction: any) {
   if (existingQueue.length > 0) return existingQueue;
 
   const bids = await getOrderedValidBids(String(auction.id));
+
+  if (!bids.length) return [];
+
   const sb = supabaseAdmin();
   const now = new Date();
-
-  if (!bids.length) {
-    return [];
-  }
 
   const rows = bids.map((bid: any, idx: number) => ({
     auction_id: auction.id,
@@ -188,6 +189,7 @@ async function buildQueueIfMissing(auction: any) {
     bidder_wallet: bid.bidder_wallet,
     amount_lamports: bid.amount_lamports,
     priority_rank: idx + 1,
+    // First bidder in queue gets the 45s payment window immediately
     status: idx === 0 ? "awaiting_payment" : "queued",
     payment_due_at: idx === 0 ? new Date(now.getTime() + PAYMENT_WINDOW_MS).toISOString() : null
   }));
@@ -252,7 +254,8 @@ async function setQueueRowStatus(rowId: string, patch: Record<string, any>) {
 }
 
 async function createWinnerFromQueueRow(queueRow: any) {
-  const existingWinner = await getWinner(String(queueRow.auction_id));
+  // Don't create a duplicate winner if one already exists for this auction
+  const existingWinner = await getConfirmedWinner(String(queueRow.auction_id));
   if (existingWinner) return existingWinner;
 
   const entry = await getEntryById(String(queueRow.entry_id));
@@ -307,175 +310,113 @@ async function activateNextQueuedBidder(auctionId: string, now: Date) {
   });
 }
 
-export async function POST(req: Request) {
-  try {
-    if (!getInternalSecretOk(req)) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+// ─── Core settle logic shared by both GET and POST ───────────────────────────
+async function runSettle(req: Request) {
+  if (!getInternalSecretOk(req)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
-    const url = new URL(req.url);
-    const targetDate = (url.searchParams.get("target_date") || currentTargetDate()).trim();
+  const url = new URL(req.url);
+  const targetDate = (url.searchParams.get("target_date") || currentTargetDate()).trim();
 
-    const auction = await getAuction(targetDate);
-    if (!auction) {
-      return NextResponse.json({ error: "Auction not found for target date" }, { status: 404 });
-    }
+  const auction = await getAuction(targetDate);
+  if (!auction) {
+    return NextResponse.json({ error: "Auction not found for target date" }, { status: 404 });
+  }
 
-    const now = new Date();
-    const auctionEndsAtMs = Date.parse(String(auction.auction_ends_at));
+  const now = new Date();
+  const auctionEndsAtMs = Date.parse(String(auction.auction_ends_at));
 
-    if (Number.isFinite(auctionEndsAtMs) && now.getTime() < auctionEndsAtMs) {
-      return NextResponse.json({ error: "Auction has not ended yet" }, { status: 400 });
-    }
+  if (Number.isFinite(auctionEndsAtMs) && now.getTime() < auctionEndsAtMs) {
+    return NextResponse.json({ error: "Auction has not ended yet" }, { status: 400 });
+  }
 
-    let updatedAuction = auction;
+  let updatedAuction = auction;
 
-    if (updatedAuction.status === "scheduled" || updatedAuction.status === "live") {
-      updatedAuction = await markAuctionStatus(String(updatedAuction.id), "awaiting_payment");
-    }
+  // Move status to awaiting_payment if still sitting on scheduled or live
+  if (updatedAuction.status === "scheduled" || updatedAuction.status === "live") {
+    updatedAuction = await markAuctionStatus(String(updatedAuction.id), "awaiting_payment");
+  }
 
-    const existingWinner = await getWinner(String(updatedAuction.id));
-    if (existingWinner) {
-      const queue = await getExistingPaymentQueue(String(updatedAuction.id));
-      return NextResponse.json({
-        ok: true,
-        targetDate,
-        auction: updatedAuction,
-        winner: existingWinner,
-        queue,
-        settled: true,
-        message: "Winner already finalized"
-      });
-    }
-
-    let queue = await buildQueueIfMissing(updatedAuction);
-
-    if (!queue.length) {
-      updatedAuction = await markAuctionStatus(String(updatedAuction.id), "rolled_over");
-      return NextResponse.json({
-        ok: true,
-        targetDate,
-        auction: updatedAuction,
-        winner: null,
-        queue: [],
-        settled: true,
-        message: "No valid paid bidders. Auction rolled over."
-      });
-    }
-
-    const alreadyPaid = await getPaidQueueRow(String(updatedAuction.id));
-    if (alreadyPaid) {
-      const winner = await createWinnerFromQueueRow(alreadyPaid);
-      updatedAuction = await markAuctionStatus(String(updatedAuction.id), "completed");
-      queue = await getExistingPaymentQueue(String(updatedAuction.id));
-
-      return NextResponse.json({
-        ok: true,
-        targetDate,
-        auction: updatedAuction,
-        winner,
-        queue,
-        settled: true,
-        message: "Winner finalized from paid queue row"
-      });
-    }
-
-    let current = queue.find((q) => q.status === "awaiting_payment") ?? null;
-
-    if (!current) {
-      current = await activateNextQueuedBidder(String(updatedAuction.id), now);
-      queue = await getExistingPaymentQueue(String(updatedAuction.id));
-    }
-
-    if (!current) {
-      updatedAuction = await markAuctionStatus(String(updatedAuction.id), "rolled_over");
-      return NextResponse.json({
-        ok: true,
-        targetDate,
-        auction: updatedAuction,
-        winner: null,
-        queue,
-        settled: true,
-        message: "No queued bidders remaining. Auction rolled over."
-      });
-    }
-
-    const dueAtMs = current.payment_due_at ? Date.parse(String(current.payment_due_at)) : NaN;
-
-    if (!Number.isFinite(dueAtMs)) {
-      current = await setQueueRowStatus(String(current.id), {
-        status: "awaiting_payment",
-        payment_due_at: new Date(now.getTime() + PAYMENT_WINDOW_MS).toISOString()
-      });
-
-      queue = await getExistingPaymentQueue(String(updatedAuction.id));
-
-      return NextResponse.json({
-        ok: true,
-        targetDate,
-        auction: updatedAuction,
-        winner: null,
-        queue,
-        currentPaymentRequest: current,
-        settled: false,
-        message: "Payment window refreshed for current bidder"
-      });
-    }
-
-    if (now.getTime() <= dueAtMs) {
-      queue = await getExistingPaymentQueue(String(updatedAuction.id));
-
-      return NextResponse.json({
-        ok: true,
-        targetDate,
-        auction: updatedAuction,
-        winner: null,
-        queue,
-        currentPaymentRequest: current,
-        settled: false,
-        message: "Awaiting payment from current top bidder"
-      });
-    }
-
-    await setQueueRowStatus(String(current.id), {
-      status: "skipped",
-      skipped_at: now.toISOString()
+  // If a confirmed winner already exists, nothing left to do
+  const existingWinner = await getConfirmedWinner(String(updatedAuction.id));
+  if (existingWinner) {
+    const queue = await getExistingPaymentQueue(String(updatedAuction.id));
+    return NextResponse.json({
+      ok: true,
+      targetDate,
+      auction: updatedAuction,
+      winner: existingWinner,
+      queue,
+      settled: true,
+      message: "Winner already finalized"
     });
+  }
 
-    const nextActive = await activateNextQueuedBidder(String(updatedAuction.id), now);
+  // Build the payment queue from ranked bids if it doesn't exist yet
+  let queue = await buildQueueIfMissing(updatedAuction);
+
+  if (!queue.length) {
+    updatedAuction = await markAuctionStatus(String(updatedAuction.id), "rolled_over");
+    return NextResponse.json({
+      ok: true,
+      targetDate,
+      auction: updatedAuction,
+      winner: null,
+      queue: [],
+      settled: true,
+      message: "No valid paid bidders. Auction rolled over."
+    });
+  }
+
+  // If someone already paid via the queue, lock them in as winner
+  const alreadyPaid = await getPaidQueueRow(String(updatedAuction.id));
+  if (alreadyPaid) {
+    const winner = await createWinnerFromQueueRow(alreadyPaid);
+    updatedAuction = await markAuctionStatus(String(updatedAuction.id), "completed");
     queue = await getExistingPaymentQueue(String(updatedAuction.id));
 
-    const paidAfter = await getPaidQueueRow(String(updatedAuction.id));
-    if (paidAfter) {
-      const winner = await createWinnerFromQueueRow(paidAfter);
-      updatedAuction = await markAuctionStatus(String(updatedAuction.id), "completed");
-      queue = await getExistingPaymentQueue(String(updatedAuction.id));
+    return NextResponse.json({
+      ok: true,
+      targetDate,
+      auction: updatedAuction,
+      winner,
+      queue,
+      settled: true,
+      message: "Winner finalized from paid queue row"
+    });
+  }
 
-      return NextResponse.json({
-        ok: true,
-        targetDate,
-        auction: updatedAuction,
-        winner,
-        queue,
-        settled: true,
-        message: "Winner finalized"
-      });
-    }
+  let current = queue.find((q: any) => q.status === "awaiting_payment") ?? null;
 
-    if (!nextActive) {
-      updatedAuction = await markAuctionStatus(String(updatedAuction.id), "rolled_over");
-      return NextResponse.json({
-        ok: true,
-        targetDate,
-        auction: updatedAuction,
-        winner: null,
-        queue,
-        settled: true,
-        message: "All payment windows expired. Auction rolled over."
-      });
-    }
+  // If nobody is currently awaiting payment, activate the next queued bidder
+  if (!current) {
+    current = await activateNextQueuedBidder(String(updatedAuction.id), now);
+    queue = await getExistingPaymentQueue(String(updatedAuction.id));
+  }
 
-    updatedAuction = await markAuctionStatus(String(updatedAuction.id), "awaiting_payment");
+  if (!current) {
+    updatedAuction = await markAuctionStatus(String(updatedAuction.id), "rolled_over");
+    return NextResponse.json({
+      ok: true,
+      targetDate,
+      auction: updatedAuction,
+      winner: null,
+      queue,
+      settled: true,
+      message: "No queued bidders remaining. Auction rolled over."
+    });
+  }
+
+  const dueAtMs = current.payment_due_at ? Date.parse(String(current.payment_due_at)) : NaN;
+
+  // payment_due_at was somehow missing — reset it
+  if (!Number.isFinite(dueAtMs)) {
+    current = await setQueueRowStatus(String(current.id), {
+      status: "awaiting_payment",
+      payment_due_at: new Date(now.getTime() + PAYMENT_WINDOW_MS).toISOString()
+    });
+    queue = await getExistingPaymentQueue(String(updatedAuction.id));
 
     return NextResponse.json({
       ok: true,
@@ -483,57 +424,100 @@ export async function POST(req: Request) {
       auction: updatedAuction,
       winner: null,
       queue,
-      currentPaymentRequest: nextActive,
+      currentPaymentRequest: current,
       settled: false,
-      message: "Payment window rolled down to next bidder"
+      message: "Payment window refreshed for current bidder"
     });
+  }
+
+  // Window still open — bidder has time left
+  if (now.getTime() <= dueAtMs) {
+    queue = await getExistingPaymentQueue(String(updatedAuction.id));
+
+    return NextResponse.json({
+      ok: true,
+      targetDate,
+      auction: updatedAuction,
+      winner: null,
+      queue,
+      currentPaymentRequest: current,
+      settled: false,
+      message: "Awaiting payment from current top bidder"
+    });
+  }
+
+  // Window expired — skip this bidder and move to the next one
+  await setQueueRowStatus(String(current.id), {
+    status: "skipped",
+    skipped_at: now.toISOString()
+  });
+
+  const nextActive = await activateNextQueuedBidder(String(updatedAuction.id), now);
+  queue = await getExistingPaymentQueue(String(updatedAuction.id));
+
+  const paidAfter = await getPaidQueueRow(String(updatedAuction.id));
+  if (paidAfter) {
+    const winner = await createWinnerFromQueueRow(paidAfter);
+    updatedAuction = await markAuctionStatus(String(updatedAuction.id), "completed");
+    queue = await getExistingPaymentQueue(String(updatedAuction.id));
+
+    return NextResponse.json({
+      ok: true,
+      targetDate,
+      auction: updatedAuction,
+      winner,
+      queue,
+      settled: true,
+      message: "Winner finalized"
+    });
+  }
+
+  if (!nextActive) {
+    updatedAuction = await markAuctionStatus(String(updatedAuction.id), "rolled_over");
+    return NextResponse.json({
+      ok: true,
+      targetDate,
+      auction: updatedAuction,
+      winner: null,
+      queue,
+      settled: true,
+      message: "All payment windows expired. Auction rolled over."
+    });
+  }
+
+  updatedAuction = await markAuctionStatus(String(updatedAuction.id), "awaiting_payment");
+
+  return NextResponse.json({
+    ok: true,
+    targetDate,
+    auction: updatedAuction,
+    winner: null,
+    queue,
+    currentPaymentRequest: nextActive,
+    settled: false,
+    message: "Payment window rolled down to next bidder"
+  });
+}
+
+// ─── GET — called by Vercel cron at 8:05pm UTC ───────────────────────────────
+export async function GET(req: Request) {
+  try {
+    return await runSettle(req);
   } catch (e: any) {
     return NextResponse.json(
-      {
-        error: "Failed to settle bidding ad auction",
-        details: e?.message ?? String(e)
-      },
+      { error: "Failed to settle bidding ad auction", details: e?.message ?? String(e) },
       { status: 500 }
     );
   }
 }
 
-export async function GET(req: Request) {
+// ─── POST — can be called manually if needed ─────────────────────────────────
+export async function POST(req: Request) {
   try {
-    if (!getInternalSecretOk(req)) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const url = new URL(req.url);
-    const targetDate = (url.searchParams.get("target_date") || currentTargetDate()).trim();
-
-    const auction = await getAuction(targetDate);
-    if (!auction) {
-      return NextResponse.json({ error: "Auction not found for target date" }, { status: 404 });
-    }
-
-    const [winner, queue] = await Promise.all([
-      getWinner(String(auction.id)),
-      getExistingPaymentQueue(String(auction.id))
-    ]);
-
-    const summary = summarizeQueue(queue);
-
-    return NextResponse.json({
-      ok: true,
-      targetDate,
-      auction,
-      winner,
-      queue,
-      currentPaymentRequest: summary.current,
-      settled: !!winner || auction.status === "rolled_over" || (!summary.current && !summary.queued.length)
-    });
+    return await runSettle(req);
   } catch (e: any) {
     return NextResponse.json(
-      {
-        error: "Failed to load bidding ad settlement",
-        details: e?.message ?? String(e)
-      },
+      { error: "Failed to settle bidding ad auction", details: e?.message ?? String(e) },
       { status: 500 }
     );
   }
