@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
+import { createNotificationsForFollowers } from "@/lib/notifications";
 
 export const dynamic = "force-dynamic";
 
@@ -192,6 +193,17 @@ export async function POST(req: Request) {
       .single();
 
     if (postErr) return NextResponse.json({ error: postErr.message }, { status: 500 });
+
+    // ── Notify followers ──────────────────────────────────────────────
+    const preview = finalContent ? finalContent.slice(0, 80) + (finalContent.length > 80 ? "…" : "") : null;
+    await createNotificationsForFollowers({
+      actorWallet: viewerWallet,
+      type: "new_post",
+      title: "posted a new update",
+      body: preview,
+      link: `/dev/${encodeURIComponent(viewerWallet)}`,
+    });
+    // ─────────────────────────────────────────────────────────────────
 
     return NextResponse.json({ ok: true, post });
   } catch (e: any) {
