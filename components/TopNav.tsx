@@ -39,6 +39,7 @@ export default function TopNav() {
   const pathname = usePathname();
   const router = useRouter();
   const [ctx, setCtx] = useState<Ctx | null>(null);
+  const [unseenCount, setUnseenCount] = useState(0);
 
   useEffect(() => {
     // Pull role/sub status from Supabase via server route
@@ -46,6 +47,29 @@ export default function TopNav() {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => (d?.ok ? setCtx(d) : null))
       .catch(() => null);
+  }, []);
+
+  // Poll for unseen notifications every 30s to keep the red dot fresh
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkUnseen() {
+      try {
+        const res = await fetch("/api/notifications", { cache: "no-store" });
+        if (!res.ok || cancelled) return;
+        const json = await res.json();
+        if (!cancelled) setUnseenCount(json?.unseenCount ?? 0);
+      } catch {
+        // silently ignore — don't break the nav
+      }
+    }
+
+    checkUnseen();
+    const interval = setInterval(checkUnseen, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, []);
 
   const isDev = ctx?.role === "dev" || ctx?.role === "admin";
@@ -61,7 +85,21 @@ export default function TopNav() {
           <div className="hidden items-center gap-2 sm:flex">
             <Tab href="/dashboard" label="Dashboard" active={pathname.startsWith("/dashboard")} />
             <Tab href="/coins" label="Coins" active={pathname.startsWith("/coins")} />
-            <Tab href="/account" label="Account" active={pathname.startsWith("/account")} />
+            {/* Account tab with red dot for unseen notifications */}
+            <Link
+              href="/account"
+              className={[
+                "relative rounded-xl px-3 py-2 text-sm transition",
+                pathname.startsWith("/account")
+                  ? "bg-white text-black"
+                  : "text-zinc-300 hover:bg-white/5 hover:text-white"
+              ].join(" ")}
+            >
+              Account
+              {unseenCount > 0 && (
+                <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-red-500 ring-2 ring-zinc-950" />
+              )}
+            </Link>
             <Tab href="/subscription" label="Subscription" active={pathname.startsWith("/subscription")} />
             {isDev && <Tab href="/dev/profile" label="Dev Profile" active={pathname.startsWith("/dev/profile")} />}
           </div>
@@ -93,7 +131,21 @@ export default function TopNav() {
         <div className="mx-auto flex max-w-5xl gap-2 overflow-x-auto px-6 pb-4">
           <Tab href="/dashboard" label="Dashboard" active={pathname.startsWith("/dashboard")} />
           <Tab href="/coins" label="Coins" active={pathname.startsWith("/coins")} />
-          <Tab href="/account" label="Account" active={pathname.startsWith("/account")} />
+          {/* Account tab with red dot for unseen notifications */}
+          <Link
+            href="/account"
+            className={[
+              "relative rounded-xl px-3 py-2 text-sm transition",
+              pathname.startsWith("/account")
+                ? "bg-white text-black"
+                : "text-zinc-300 hover:bg-white/5 hover:text-white"
+            ].join(" ")}
+          >
+            Account
+            {unseenCount > 0 && (
+              <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-red-500 ring-2 ring-zinc-950" />
+            )}
+          </Link>
           <Tab href="/subscription" label="Subscription" active={pathname.startsWith("/subscription")} />
           {isDev && <Tab href="/dev/profile" label="Dev Profile" active={pathname.startsWith("/dev/profile")} />}
         </div>
