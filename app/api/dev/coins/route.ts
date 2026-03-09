@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { createNotificationsForFollowers } from "@/lib/notifications";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -169,6 +170,16 @@ export async function POST(req: Request) {
     }
 
     const banner_url = await signCoinBannerUrl(sb, banner_path);
+
+    // ── Notify followers ──────────────────────────────────────────────
+    await createNotificationsForFollowers({
+      actorWallet: session.wallet,
+      type: "new_coin",
+      title: "listed a new coin",
+      body: title ?? token_address ?? null,
+      link: `/coin/${encodeURIComponent(String(coin.id))}`,
+    });
+    // ─────────────────────────────────────────────────────────────────
 
     return NextResponse.json({
       ok: true,
