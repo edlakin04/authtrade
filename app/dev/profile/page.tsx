@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import TopNav from "@/components/TopNav";
 import Link from "next/link";
 import { useWallet } from "@solana/wallet-adapter-react";
@@ -475,7 +475,8 @@ export default function DevProfilePage() {
     refreshGoldenHour();
     refreshBiddingAd();
     refreshCollab();
-  }, [refreshCollab]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function fetchCoinMeta(mint: string) {
     const m = (mint || "").trim();
@@ -1039,7 +1040,7 @@ export default function DevProfilePage() {
 
 
   // ── Collab functions ──────────────────────────────────────────────────────────
-  const refreshCollab = useCallback(async () => {
+  async function refreshCollab() {
     setCollabLoading(true);
     try {
       const res = await fetch("/api/collab/me", { cache: "no-store" });
@@ -1051,7 +1052,7 @@ export default function DevProfilePage() {
     } catch { /* silent */ } finally {
       setCollabLoading(false);
     }
-  }, []);
+  }
 
   async function searchDevs(query: string) {
     const q = query.trim();
