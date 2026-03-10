@@ -2580,7 +2580,6 @@ export default function DevProfilePage() {
                 )}
               </div>
             </div>
-          </div>
 
             {/* ── COLLAB COIN LAUNCH SECTION ─────────────────────────────────── */}
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5 lg:col-span-2">
