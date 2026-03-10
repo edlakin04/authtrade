@@ -202,6 +202,89 @@ export async function GET(_req: Request, { params }: { params: Promise<{ wallet:
 
   if (coinsRes.error) return NextResponse.json({ error: coinsRes.error.message }, { status: 500 });
 
+  const coinsRaw = coinsRes.data ?? [];
+
+  // ── Attach collab metadata to any coin that was launched via a collab ────────
+  // Look up collab_launches that have a coin_id matching one of this dev's coins
+  const coinIds = coinsRaw.map((c: any) => c.id as string);
+  let collabByCoinId = new Map<string, { devs: { wallet: string; display_name: string | null; pfp_url: string | null }[] }>();
+
+  if (coinIds.length > 0) {
+    const { data: collabLaunches } = await sb
+      .from("collab_launches")
+      .select("id, coin_id, initiator_wallet")
+      .in("coin_id", coinIds)
+      .eq("status", "launched");
+
+    if (collabLaunches && collabLaunches.length > 0) {
+      const collabIds = collabLaunches.map((cl: any) => cl.id as string);
+
+      // Get all invite rows for these collabs
+      const { data: inviteRows } = await sb
+        .from("collab_launch_invites")
+        .select("collab_id, dev_wallet")
+        .in("collab_id", collabIds)
+        .eq("status", "accepted");
+
+      // Get all wallets involved
+      const allCollabWallets = Array.from(new Set([
+        ...collabLaunches.map((cl: any) => cl.initiator_wallet as string),
+        ...(inviteRows ?? []).map((i: any) => i.dev_wallet as string)
+      ]));
+
+      const { data: collabProfiles } = await sb
+        .from("dev_profiles")
+        .select("wallet, display_name, pfp_path")
+        .in("wallet", allCollabWallets);
+
+      // Sign pfp urls
+      const collabProfileMap = new Map<string, { display_name: string | null; pfp_url: string | null }>();
+      for (const p of collabProfiles ?? []) {
+        let pfpUrl: string | null = null;
+        if ((p as any).pfp_path) {
+          const { data: signed } = await sb.storage.from("dev-pfps").createSignedUrl((p as any).pfp_path, 60 * 30);
+          pfpUrl = signed?.signedUrl ?? null;
+        }
+        collabProfileMap.set(p.wallet, { display_name: p.display_name ?? null, pfp_url: pfpUrl });
+      }
+
+      // Group invitees by collab_id
+      const invitesByCollab = new Map<string, string[]>();
+      for (const i of inviteRows ?? []) {
+        const cid = i.collab_id as string;
+        if (!invitesByCollab.has(cid)) invitesByCollab.set(cid, []);
+        invitesByCollab.get(cid)!.push(i.dev_wallet as string);
+      }
+
+      // Map coin_id -> all participating devs (EXCLUDING the page dev so we only show co-devs)
+      for (const cl of collabLaunches) {
+        const allDevWallets = [
+          cl.initiator_wallet,
+          ...(invitesByCollab.get(cl.id) ?? [])
+        ].filter((w: string) => w !== devWallet); // exclude the profile owner
+
+        const devMetas = allDevWallets.map((w: string) => {
+          const m = collabProfileMap.get(w);
+          return { wallet: w, display_name: m?.display_name ?? null, pfp_url: m?.pfp_url ?? null };
+        });
+
+        if (cl.coin_id) {
+          collabByCoinId.set(cl.coin_id as string, { devs: devMetas });
+        }
+      }
+    }
+  }
+
+  // Attach is_collab + collab_devs to each coin
+  const coins = coinsRaw.map((c: any) => {
+    const collab = collabByCoinId.get(c.id as string);
+    return {
+      ...c,
+      is_collab: !!collab,
+      collab_devs: collab?.devs ?? []
+    };
+  });
+
   // Follow status (only if signed in)
   let isFollowing = false;
   if (viewerWallet) {
@@ -238,6 +321,6 @@ export async function GET(_req: Request, { params }: { params: Promise<{ wallet:
       banner_url
     },
     posts,
-    coins: coinsRes.data ?? []
+    coins
   });
 }
