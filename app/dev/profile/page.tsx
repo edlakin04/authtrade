@@ -2887,7 +2887,7 @@ export default function DevProfilePage() {
                 <p className="mt-4 text-xs text-zinc-500">No collab launches yet. Click + New Collab to get started.</p>
               )}
             </div>
-
+          </div>
         )}
       </div>
     </main>
