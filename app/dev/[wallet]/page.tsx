@@ -48,6 +48,8 @@ type DevPayload = {
     title: string | null;
     description: string | null;
     created_at: string;
+    is_collab?: boolean;
+    collab_devs?: { wallet: string; display_name: string | null; pfp_url: string | null }[];
   }[];
 };
 
@@ -687,9 +689,16 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
                       const displayName = meta?.name || c.title || "Untitled coin";
                       const symbol = meta?.symbol || null;
                       const logo = meta?.image || null;
+                      const isCollab = !!c.is_collab;
+                      const collabDevs = c.collab_devs ?? [];
 
                       return (
-                        <div key={c.id} className="rounded-xl border border-white/10 bg-black/30 p-4">
+                        <div key={c.id} className={[
+                          "rounded-xl border p-4",
+                          isCollab
+                            ? "border-purple-500/20 bg-purple-500/5"
+                            : "border-white/10 bg-black/30"
+                        ].join(" ")}>
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex min-w-0 items-start gap-3">
                               <div className="h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-white/5">
@@ -711,6 +720,11 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
                                       {symbol}
                                     </span>
                                   ) : null}
+                                  {isCollab && (
+                                    <span className="rounded-full border border-purple-500/30 bg-purple-500/10 px-2 py-1 text-[11px] text-purple-300">
+                                      🤝 Collab
+                                    </span>
+                                  )}
                                   {loadingMeta ? <span className="text-[11px] text-zinc-500">Loading…</span> : null}
                                   <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] text-zinc-300">
                                     Permanent
@@ -719,6 +733,36 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
 
                                 <div className="mt-1 break-all font-mono text-xs text-zinc-400">{c.token_address}</div>
                                 {c.description ? <div className="mt-2 text-xs text-zinc-300">{c.description}</div> : null}
+
+                                {/* Co-dev avatars for collab coins */}
+                                {isCollab && collabDevs.length > 0 && (
+                                  <div className="mt-2 flex items-center gap-1.5">
+                                    <span className="text-[11px] text-zinc-500">With:</span>
+                                    <div className="flex -space-x-1.5">
+                                      {collabDevs.map((d) => (
+                                        <Link
+                                          key={d.wallet}
+                                          href={`/dev/${encodeURIComponent(d.wallet)}`}
+                                          title={d.display_name || d.wallet}
+                                          className="relative h-6 w-6 overflow-hidden rounded-full border border-white/20 bg-white/5 hover:z-10 hover:ring-2 hover:ring-purple-400"
+                                        >
+                                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                                          {d.pfp_url ? (
+                                            <img src={d.pfp_url} alt="" className="h-full w-full object-cover" />
+                                          ) : (
+                                            <div className="flex h-full w-full items-center justify-center text-[9px] text-zinc-400">
+                                              {(d.display_name || d.wallet).slice(0, 1).toUpperCase()}
+                                            </div>
+                                          )}
+                                        </Link>
+                                      ))}
+                                    </div>
+                                    <span className="text-[11px] text-zinc-500">
+                                      {collabDevs.map((d) => d.display_name || `${d.wallet.slice(0,4)}…${d.wallet.slice(-4)}`).join(", ")}
+                                    </span>
+                                  </div>
+                                )}
+
                                 <div className="mt-2 text-[11px] text-zinc-500">
                                   {new Date(c.created_at).toLocaleString()}
                                 </div>
