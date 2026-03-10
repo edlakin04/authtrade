@@ -81,7 +81,7 @@ export async function PATCH(
     const devName = shortAddr(viewerWallet);
     const coinLabel = collab.title ? `"${collab.title}"` : collab.token_address;
 
-    await sb.from("notifications").insert({
+    try { await sb.from("notifications").insert({
       recipient_wallet: collab.initiator_wallet,
       actor_wallet: viewerWallet,
       type: action === "accept" ? "collab_accepted" : "collab_declined",
@@ -91,7 +91,7 @@ export async function PATCH(
       body: `${devName} ${action === "accept" ? "is in!" : "won't be joining."}`,
       link: `/dev/profile`,
       seen: false
-    }).catch(() => null);
+    }); } catch { /* silent */ }
 
     // ── If declined → return early, no launch yet ─────────────────────────────
     if (action === "decline") {
@@ -186,7 +186,7 @@ export async function PATCH(
       seen: false
     }));
 
-    await sb.from("notifications").insert(launchNotiRows).catch(() => null);
+    try { await sb.from("notifications").insert(launchNotiRows); } catch { /* silent */ }
 
     return NextResponse.json({
       ok: true,
