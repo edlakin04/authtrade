@@ -40,16 +40,16 @@ export default function TopNav() {
   const router = useRouter();
   const [ctx, setCtx] = useState<Ctx | null>(null);
   const [unseenCount, setUnseenCount] = useState(0);
+  const [collabPendingCount, setCollabPendingCount] = useState(0);
 
   useEffect(() => {
-    // Pull role/sub status from Supabase via server route
     fetch("/api/context/refresh", { method: "POST" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => (d?.ok ? setCtx(d) : null))
       .catch(() => null);
   }, []);
 
-  // Poll for unseen notifications every 30s to keep the red dot fresh
+  // Poll for unseen notifications every 30s
   useEffect(() => {
     let cancelled = false;
 
@@ -60,17 +60,37 @@ export default function TopNav() {
         const json = await res.json();
         if (!cancelled) setUnseenCount(json?.unseenCount ?? 0);
       } catch {
-        // silently ignore — don't break the nav
+        // silently ignore
       }
     }
 
     checkUnseen();
     const interval = setInterval(checkUnseen, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
+    return () => { cancelled = true; clearInterval(interval); };
   }, []);
+
+  // Poll for pending collab invites every 30s (only when user is a dev)
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkCollab() {
+      try {
+        const res = await fetch("/api/collab/me", { cache: "no-store" });
+        if (!res.ok || cancelled) return;
+        const json = await res.json();
+        if (!cancelled) setCollabPendingCount(json?.pendingInviteCount ?? 0);
+      } catch {
+        // silently ignore
+      }
+    }
+
+    // Only poll if we know the user is a dev
+    if (ctx?.role === "dev" || ctx?.role === "admin") {
+      checkCollab();
+      const interval = setInterval(checkCollab, 30_000);
+      return () => { cancelled = true; clearInterval(interval); };
+    }
+  }, [ctx?.role]);
 
   const isDev = ctx?.role === "dev" || ctx?.role === "admin";
 
@@ -85,7 +105,8 @@ export default function TopNav() {
           <div className="hidden items-center gap-2 sm:flex">
             <Tab href="/dashboard" label="Dashboard" active={pathname.startsWith("/dashboard")} />
             <Tab href="/coins" label="Coins" active={pathname.startsWith("/coins")} />
-            {/* Account tab with red dot for unseen notifications */}
+
+            {/* Account tab — red dot for unseen notifications */}
             <Link
               href="/account"
               className={[
@@ -100,8 +121,26 @@ export default function TopNav() {
                 <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-red-500 ring-2 ring-zinc-950" />
               )}
             </Link>
+
             <Tab href="/subscription" label="Subscription" active={pathname.startsWith("/subscription")} />
-            {isDev && <Tab href="/dev/profile" label="Dev Profile" active={pathname.startsWith("/dev/profile")} />}
+
+            {/* Dev Profile tab — red dot for pending collab invites */}
+            {isDev && (
+              <Link
+                href="/dev/profile"
+                className={[
+                  "relative rounded-xl px-3 py-2 text-sm transition",
+                  pathname.startsWith("/dev/profile")
+                    ? "bg-white text-black"
+                    : "text-zinc-300 hover:bg-white/5 hover:text-white"
+                ].join(" ")}
+              >
+                Dev Profile
+                {collabPendingCount > 0 && (
+                  <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-red-500 ring-2 ring-zinc-950" />
+                )}
+              </Link>
+            )}
           </div>
         </div>
 
@@ -131,7 +170,8 @@ export default function TopNav() {
         <div className="mx-auto flex max-w-5xl gap-2 overflow-x-auto px-6 pb-4">
           <Tab href="/dashboard" label="Dashboard" active={pathname.startsWith("/dashboard")} />
           <Tab href="/coins" label="Coins" active={pathname.startsWith("/coins")} />
-          {/* Account tab with red dot for unseen notifications */}
+
+          {/* Account tab — red dot for unseen notifications */}
           <Link
             href="/account"
             className={[
@@ -146,8 +186,26 @@ export default function TopNav() {
               <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-red-500 ring-2 ring-zinc-950" />
             )}
           </Link>
+
           <Tab href="/subscription" label="Subscription" active={pathname.startsWith("/subscription")} />
-          {isDev && <Tab href="/dev/profile" label="Dev Profile" active={pathname.startsWith("/dev/profile")} />}
+
+          {/* Dev Profile tab — red dot for pending collab invites */}
+          {isDev && (
+            <Link
+              href="/dev/profile"
+              className={[
+                "relative rounded-xl px-3 py-2 text-sm transition",
+                pathname.startsWith("/dev/profile")
+                  ? "bg-white text-black"
+                  : "text-zinc-300 hover:bg-white/5 hover:text-white"
+              ].join(" ")}
+            >
+              Dev Profile
+              {collabPendingCount > 0 && (
+                <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-red-500 ring-2 ring-zinc-950" />
+              )}
+            </Link>
+          )}
         </div>
       </div>
     </header>
