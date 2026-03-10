@@ -225,7 +225,7 @@ export async function POST(req: Request) {
       seen: false
     }));
 
-    await sb.from("notifications").insert(notiRows).catch(() => null);
+    try { await sb.from("notifications").insert(notiRows); } catch { /* silent */ }
 
     return NextResponse.json({
       ok: true,
