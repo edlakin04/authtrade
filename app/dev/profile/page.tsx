@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import TopNav from "@/components/TopNav";
 import Link from "next/link";
 import { useWallet } from "@solana/wallet-adapter-react";
@@ -330,6 +330,67 @@ export default function DevProfilePage() {
   const [communityByCoinId, setCommunityByCoinId] = useState<Record<string, Community | null>>({});
   const [communityLoadingByCoinId, setCommunityLoadingByCoinId] = useState<Record<string, boolean>>({});
   const [communityCreatingByCoinId, setCommunityCreatingByCoinId] = useState<Record<string, boolean>>({});
+  // ── Collab state ─────────────────────────────────────────────────────────────
+  type CollabInvitee = {
+    wallet: string;
+    display_name: string | null;
+    pfp_url: string | null;
+    status: "pending" | "accepted" | "declined";
+    responded_at: string | null;
+  };
+
+  type CollabInitiated = {
+    id: string;
+    token_address: string;
+    title: string | null;
+    description: string | null;
+    banner_url: string | null;
+    status: "pending" | "launched" | "cancelled";
+    coin_id: string | null;
+    created_at: string;
+    launched_at: string | null;
+    invites: CollabInvitee[];
+    pendingCount: number;
+    acceptedCount: number;
+    declinedCount: number;
+  };
+
+  type CollabInvited = {
+    id: string;
+    token_address: string;
+    title: string | null;
+    description: string | null;
+    banner_url: string | null;
+    status: "pending" | "launched" | "cancelled";
+    coin_id: string | null;
+    created_at: string;
+    launched_at: string | null;
+    initiator: { wallet: string; display_name: string | null; pfp_url: string | null };
+    my_invite_status: "pending" | "accepted" | "declined";
+    my_invite_id: string | null;
+    other_invitees: CollabInvitee[];
+  };
+
+  const [collabInitiated, setCollabInitiated] = useState<CollabInitiated[]>([]);
+  const [collabInvited, setCollabInvited] = useState<CollabInvited[]>([]);
+  const [collabPendingCount, setCollabPendingCount] = useState(0);
+  const [collabLoading, setCollabLoading] = useState(false);
+
+  // New collab launch form state
+  const [collabFormOpen, setCollabFormOpen] = useState(false);
+  const [collabAddr, setCollabAddr] = useState("");
+  const [collabTitle, setCollabTitle] = useState("");
+  const [collabDesc, setCollabDesc] = useState("");
+  const [collabBannerFile, setCollabBannerFile] = useState<File | null>(null);
+  const [collabBannerErr, setCollabBannerErr] = useState<string | null>(null);
+  const [collabInviteSearch, setCollabInviteSearch] = useState("");
+  const [collabInviteList, setCollabInviteList] = useState<{ wallet: string; display_name: string | null }[]>([]);
+  const [collabSearchResults, setCollabSearchResults] = useState<{ wallet: string; display_name: string | null }[]>([]);
+  const [collabSearching, setCollabSearching] = useState(false);
+  const [collabSubmitting, setCollabSubmitting] = useState(false);
+  const [collabRespondingId, setCollabRespondingId] = useState<string | null>(null);
+  const [collabCancellingId, setCollabCancellingId] = useState<string | null>(null);
+
 
   async function refreshGoldenHour() {
     setGoldenHourLoading(true);
@@ -413,7 +474,8 @@ export default function DevProfilePage() {
     refresh();
     refreshGoldenHour();
     refreshBiddingAd();
-  }, []);
+    refreshCollab();
+  }, [refreshCollab]);
 
   async function fetchCoinMeta(mint: string) {
     const m = (mint || "").trim();
@@ -975,6 +1037,121 @@ export default function DevProfilePage() {
     }
   }
 
+
+  // ── Collab functions ──────────────────────────────────────────────────────────
+  const refreshCollab = useCallback(async () => {
+    setCollabLoading(true);
+    try {
+      const res = await fetch("/api/collab/me", { cache: "no-store" });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) return;
+      setCollabInitiated(json?.initiated ?? []);
+      setCollabInvited(json?.invited ?? []);
+      setCollabPendingCount(json?.pendingInviteCount ?? 0);
+    } catch { /* silent */ } finally {
+      setCollabLoading(false);
+    }
+  }, []);
+
+  async function searchDevs(query: string) {
+    const q = query.trim();
+    if (!q) { setCollabSearchResults([]); return; }
+    setCollabSearching(true);
+    try {
+      // Search by wallet prefix or display name via public dev batch
+      // We pass the query as a wallet lookup first, then fallback to name
+      const res = await fetch(`/api/public/dev/batch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallets: [q] })
+      });
+      const json = await res.json().catch(() => null);
+      const profiles = (json?.profiles ?? []) as { wallet: string; display_name: string | null; pfp_url: string | null }[];
+      // Filter out already-added devs
+      const alreadyAdded = new Set(collabInviteList.map((d) => d.wallet));
+      setCollabSearchResults(profiles.filter((p) => !alreadyAdded.has(p.wallet)).slice(0, 5));
+    } catch {
+      setCollabSearchResults([]);
+    } finally {
+      setCollabSearching(false);
+    }
+  }
+
+  function addDevToInviteList(dev: { wallet: string; display_name: string | null }) {
+    if (collabInviteList.length >= 4) { alert("Max 4 invited devs (5 total including you)."); return; }
+    if (collabInviteList.find((d) => d.wallet === dev.wallet)) return;
+    setCollabInviteList((prev) => [...prev, dev]);
+    setCollabInviteSearch("");
+    setCollabSearchResults([]);
+  }
+
+  function removeDevFromInviteList(wallet: string) {
+    setCollabInviteList((prev) => prev.filter((d) => d.wallet !== wallet));
+  }
+
+  async function submitCollab() {
+    if (!collabAddr.trim()) { alert("Enter a token address."); return; }
+    if (collabInviteList.length === 0) { alert("Invite at least one dev."); return; }
+    if (collabBannerFile) {
+      if (!["image/jpeg","image/png","image/webp"].includes(collabBannerFile.type)) {
+        setCollabBannerErr("Invalid banner type. Allowed: JPG, PNG, WEBP."); return;
+      }
+      if (collabBannerFile.size > 15 * 1024 * 1024) {
+        setCollabBannerErr("Banner too large (max 15MB)."); return;
+      }
+    }
+    setCollabSubmitting(true);
+    try {
+      const fd = new FormData();
+      fd.append("token_address", collabAddr.trim());
+      fd.append("title", collabTitle.trim());
+      fd.append("description", collabDesc.trim());
+      fd.append("invite_wallets", JSON.stringify(collabInviteList.map((d) => d.wallet)));
+      if (collabBannerFile) fd.append("file", collabBannerFile);
+
+      const res = await fetch("/api/collab", { method: "POST", body: fd });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { alert(json?.error ?? "Failed to create collab"); return; }
+
+      // Reset form
+      setCollabAddr(""); setCollabTitle(""); setCollabDesc("");
+      setCollabBannerFile(null); setCollabBannerErr(null);
+      setCollabInviteList([]); setCollabInviteSearch("");
+      setCollabFormOpen(false);
+      await refreshCollab();
+    } finally {
+      setCollabSubmitting(false);
+    }
+  }
+
+  async function respondToCollab(collabId: string, action: "accept" | "decline") {
+    setCollabRespondingId(collabId);
+    try {
+      const res = await fetch(`/api/collab/${encodeURIComponent(collabId)}/invite`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { alert(json?.error ?? "Failed to respond"); return; }
+      await refreshCollab();
+    } finally {
+      setCollabRespondingId(null);
+    }
+  }
+
+  async function cancelCollab(collabId: string) {
+    if (!confirm("Cancel this collab launch? All invited devs will be notified.")) return;
+    setCollabCancellingId(collabId);
+    try {
+      const res = await fetch(`/api/collab/${encodeURIComponent(collabId)}/cancel`, { method: "DELETE" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { alert(json?.error ?? "Failed to cancel"); return; }
+      await refreshCollab();
+    } finally {
+      setCollabCancellingId(null);
+    }
+  }
   async function deleteProfile() {
     const ok = confirm("Delete your dev profile and remove all your posts + coins?");
     if (!ok) return;
@@ -2404,6 +2581,314 @@ export default function DevProfilePage() {
               </div>
             </div>
           </div>
+
+            {/* ── COLLAB COIN LAUNCH SECTION ─────────────────────────────────── */}
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-5 lg:col-span-2">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <h2 className="text-lg font-semibold">Collab Coin Launch</h2>
+                  {collabPendingCount > 0 && (
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[11px] font-bold text-white">
+                      {collabPendingCount}
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={() => setCollabFormOpen((v) => !v)}
+                  className="shrink-0 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10"
+                >
+                  {collabFormOpen ? "Cancel" : "+ New Collab"}
+                </button>
+              </div>
+
+              <p className="mt-1 text-xs text-zinc-500">
+                Launch a coin jointly with up to 4 other devs. All must accept before the coin goes live.
+              </p>
+
+              {/* New collab form */}
+              {collabFormOpen && (
+                <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4 space-y-3">
+                  <h3 className="text-sm font-semibold text-zinc-200">New Collab Launch</h3>
+
+                  <input
+                    className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
+                    placeholder="Token address (required)"
+                    value={collabAddr}
+                    onChange={(e) => setCollabAddr(e.target.value)}
+                  />
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <input
+                      className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
+                      placeholder="Title (optional)"
+                      value={collabTitle}
+                      onChange={(e) => setCollabTitle(e.target.value)}
+                    />
+                    <input
+                      className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
+                      placeholder="Description (optional)"
+                      value={collabDesc}
+                      onChange={(e) => setCollabDesc(e.target.value)}
+                    />
+                  </div>
+
+                  {/* Banner upload */}
+                  <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                    <div className="text-xs font-semibold text-zinc-300">Banner (optional) • JPG/PNG/WEBP • max 15MB</div>
+                    {collabBannerErr && <div className="mt-1 text-xs text-red-300">{collabBannerErr}</div>}
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <label className="cursor-pointer rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10">
+                        Choose banner
+                        <input type="file" accept="image/jpeg,image/png,image/webp,image/*" className="hidden"
+                          onChange={(e) => { setCollabBannerFile(e.target.files?.[0] || null); setCollabBannerErr(null); }} />
+                      </label>
+                      {collabBannerFile && (
+                        <span className="text-xs text-zinc-400">{collabBannerFile.name}</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Dev invite search */}
+                  <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                    <div className="text-xs font-semibold text-zinc-300 mb-2">
+                      Invite devs (1–4) • type their wallet address
+                    </div>
+
+                    {/* Already added */}
+                    {collabInviteList.length > 0 && (
+                      <div className="mb-2 flex flex-wrap gap-2">
+                        {collabInviteList.map((d) => (
+                          <div key={d.wallet} className="flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2 py-1">
+                            <span className="text-xs text-zinc-200">{d.display_name || `${d.wallet.slice(0,4)}…${d.wallet.slice(-4)}`}</span>
+                            <button onClick={() => removeDevFromInviteList(d.wallet)} className="ml-1 text-[11px] text-zinc-500 hover:text-red-400">✕</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {collabInviteList.length < 4 && (
+                      <div className="relative">
+                        <input
+                          className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm"
+                          placeholder="Paste wallet address…"
+                          value={collabInviteSearch}
+                          onChange={(e) => {
+                            setCollabInviteSearch(e.target.value);
+                            searchDevs(e.target.value);
+                          }}
+                        />
+                        {collabSearching && (
+                          <div className="mt-1 text-xs text-zinc-500">Searching…</div>
+                        )}
+                        {collabSearchResults.length > 0 && (
+                          <div className="absolute z-10 mt-1 w-full rounded-xl border border-white/10 bg-zinc-900 shadow-xl">
+                            {collabSearchResults.map((r) => (
+                              <button
+                                key={r.wallet}
+                                onClick={() => addDevToInviteList(r)}
+                                className="w-full px-3 py-2 text-left text-sm hover:bg-white/5 first:rounded-t-xl last:rounded-b-xl"
+                              >
+                                <span className="font-medium text-zinc-200">{r.display_name || "Unknown"}</span>
+                                <span className="ml-2 font-mono text-xs text-zinc-500">{r.wallet.slice(0,8)}…</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {/* Allow direct add by wallet if no results */}
+                        {collabInviteSearch.length > 30 && collabSearchResults.length === 0 && !collabSearching && (
+                          <button
+                            onClick={() => addDevToInviteList({ wallet: collabInviteSearch.trim(), display_name: null })}
+                            className="mt-1 text-xs text-blue-400 hover:text-blue-300"
+                          >
+                            Add {collabInviteSearch.slice(0,8)}… directly
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={submitCollab}
+                    disabled={collabSubmitting}
+                    className="w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+                  >
+                    {collabSubmitting ? "Sending invites…" : "Send invites & create launch"}
+                  </button>
+                </div>
+              )}
+
+              {/* Incoming invites */}
+              {collabInvited.filter((c) => c.my_invite_status === "pending" && c.status === "pending").length > 0 && (
+                <div className="mt-5">
+                  <h3 className="text-sm font-semibold text-zinc-200 mb-2">
+                    🔴 Pending invites
+                  </h3>
+                  <div className="space-y-3">
+                    {collabInvited
+                      .filter((c) => c.my_invite_status === "pending" && c.status === "pending")
+                      .map((c) => (
+                        <div key={c.id} className="rounded-2xl border border-white/20 bg-white/10 p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-semibold text-white">
+                                  {c.initiator.display_name || `${c.initiator.wallet.slice(0,4)}…${c.initiator.wallet.slice(-4)}`}
+                                </span>
+                                <span className="text-xs text-zinc-400">invited you</span>
+                              </div>
+                              <div className="mt-1 text-sm text-zinc-300">{c.title || c.token_address}</div>
+                              {c.description && <div className="mt-0.5 text-xs text-zinc-500">{c.description}</div>}
+
+                              {/* Other invitees */}
+                              {c.other_invitees.length > 0 && (
+                                <div className="mt-2 flex flex-wrap gap-1">
+                                  {c.other_invitees.map((o) => (
+                                    <span key={o.wallet} className={[
+                                      "rounded-full px-2 py-0.5 text-[11px] border",
+                                      o.status === "accepted" ? "border-green-500/30 bg-green-500/10 text-green-400"
+                                      : o.status === "declined" ? "border-red-500/30 bg-red-500/10 text-red-400"
+                                      : "border-white/10 bg-white/5 text-zinc-400"
+                                    ].join(" ")}>
+                                      {o.display_name || `${o.wallet.slice(0,4)}…${o.wallet.slice(-4)}`} • {o.status}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            {c.banner_url && (
+                              <img src={c.banner_url} alt="" className="h-14 w-24 shrink-0 rounded-xl object-cover border border-white/10" />
+                            )}
+                          </div>
+
+                          <div className="mt-3 flex gap-2">
+                            <button
+                              onClick={() => respondToCollab(c.id, "accept")}
+                              disabled={collabRespondingId === c.id}
+                              className="flex-1 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+                            >
+                              {collabRespondingId === c.id ? "…" : "✓ Accept"}
+                            </button>
+                            <button
+                              onClick={() => respondToCollab(c.id, "decline")}
+                              disabled={collabRespondingId === c.id}
+                              className="flex-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10 disabled:opacity-60"
+                            >
+                              {collabRespondingId === c.id ? "…" : "✗ Decline"}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {/* My initiated collabs */}
+              {collabInitiated.length > 0 && (
+                <div className="mt-5">
+                  <h3 className="text-sm font-semibold text-zinc-200 mb-2">Your launches</h3>
+                  <div className="space-y-3">
+                    {collabInitiated.map((c) => (
+                      <div key={c.id} className={[
+                        "rounded-2xl border p-4",
+                        c.status === "launched" ? "border-green-500/20 bg-green-500/5"
+                        : c.status === "cancelled" ? "border-white/5 bg-white/[0.02] opacity-60"
+                        : "border-white/10 bg-black/30"
+                      ].join(" ")}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-semibold text-zinc-200">{c.title || c.token_address}</span>
+                              <span className={[
+                                "rounded-full px-2 py-0.5 text-[11px] border",
+                                c.status === "launched" ? "border-green-500/30 bg-green-500/10 text-green-400"
+                                : c.status === "cancelled" ? "border-white/10 bg-white/5 text-zinc-500"
+                                : "border-yellow-500/30 bg-yellow-500/10 text-yellow-400"
+                              ].join(" ")}>
+                                {c.status === "launched" ? "🚀 Launched" : c.status === "cancelled" ? "Cancelled" : "⏳ Pending"}
+                              </span>
+                            </div>
+
+                            {/* Invite breakdown */}
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {c.invites.map((inv) => (
+                                <span key={inv.wallet} className={[
+                                  "rounded-full px-2 py-0.5 text-[11px] border",
+                                  inv.status === "accepted" ? "border-green-500/30 bg-green-500/10 text-green-400"
+                                  : inv.status === "declined" ? "border-red-500/30 bg-red-500/10 text-red-400"
+                                  : "border-white/10 bg-white/5 text-zinc-400"
+                                ].join(" ")}>
+                                  {inv.display_name || `${inv.wallet.slice(0,4)}…${inv.wallet.slice(-4)}`} • {inv.status}
+                                </span>
+                              ))}
+                            </div>
+
+                            {c.status === "launched" && c.coin_id && (
+                              <Link href={`/coin/${encodeURIComponent(c.coin_id)}`}
+                                className="mt-2 inline-block rounded-xl bg-white px-3 py-1.5 text-xs font-semibold text-black hover:bg-zinc-200">
+                                View coin →
+                              </Link>
+                            )}
+                          </div>
+                          {c.banner_url && (
+                            <img src={c.banner_url} alt="" className="h-14 w-24 shrink-0 rounded-xl object-cover border border-white/10" />
+                          )}
+                        </div>
+
+                        {c.status === "pending" && (
+                          <div className="mt-3 flex items-center justify-between">
+                            <span className="text-xs text-zinc-500">
+                              {c.acceptedCount} accepted • {c.declinedCount} declined • {c.pendingCount} pending
+                            </span>
+                            <button
+                              onClick={() => cancelCollab(c.id)}
+                              disabled={collabCancellingId === c.id}
+                              className="rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/20 disabled:opacity-50"
+                            >
+                              {collabCancellingId === c.id ? "Cancelling…" : "Cancel launch"}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Past accepted/declined invites */}
+              {collabInvited.filter((c) => c.my_invite_status !== "pending").length > 0 && (
+                <div className="mt-4">
+                  <h3 className="text-xs font-semibold text-zinc-500 mb-2 uppercase tracking-wide">Past invites</h3>
+                  <div className="space-y-2">
+                    {collabInvited.filter((c) => c.my_invite_status !== "pending").map((c) => (
+                      <div key={c.id} className="flex items-center justify-between rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2">
+                        <div className="min-w-0">
+                          <span className="text-xs text-zinc-400">{c.title || `${c.token_address.slice(0,8)}…`}</span>
+                          <span className="ml-2 text-[11px] text-zinc-600">from {c.initiator.display_name || `${c.initiator.wallet.slice(0,4)}…`}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {c.status === "launched" && c.coin_id && (
+                            <Link href={`/coin/${encodeURIComponent(c.coin_id)}`} className="text-xs text-green-400 hover:underline">View →</Link>
+                          )}
+                          <span className={[
+                            "text-[11px]",
+                            c.my_invite_status === "accepted" ? "text-green-400" : "text-red-400"
+                          ].join(" ")}>
+                            {c.my_invite_status}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {collabLoading && (
+                <p className="mt-4 text-xs text-zinc-500">Loading collab data…</p>
+              )}
+              {!collabLoading && collabInitiated.length === 0 && collabInvited.length === 0 && !collabFormOpen && (
+                <p className="mt-4 text-xs text-zinc-500">No collab launches yet. Click + New Collab to get started.</p>
+              )}
+            </div>
+
         )}
       </div>
     </main>
