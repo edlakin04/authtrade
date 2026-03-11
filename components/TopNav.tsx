@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import UpgradeModal from "@/components/UpgradeModal";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 
@@ -49,6 +50,7 @@ export default function TopNav() {
   const [unseenCount, setUnseenCount] = useState(0);
   const [collabPendingCount, setCollabPendingCount] = useState(0);
   const [hasLiveStream, setHasLiveStream] = useState(false);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
 
   useEffect(() => {
     fetch("/api/context/refresh", { method: "POST" })
@@ -206,12 +208,12 @@ export default function TopNav() {
         <div className="flex items-center gap-2">
           {ctx ? (
             ctx.isTrial ? (
-              <a
-                href="/?subscribe=1&trial_upgrade=1"
+              <button
+                onClick={() => setUpgradeOpen(true)}
                 className="hidden rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-500/20 transition md:block"
               >
                 🕐 Trial — {ctx.daysRemaining}d left · Upgrade
-              </a>
+              </button>
             ) : (
               <div className="hidden rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300 md:block">
                 {ctx.role.toUpperCase()} • {ctx.subscribedActive ? "SUB ACTIVE" : "NO SUB"}
