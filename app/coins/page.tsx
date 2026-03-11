@@ -148,7 +148,10 @@ export default function CoinsPage() {
 
     const res = await fetch(endpoint, { method });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) return alert(json?.error ?? "Vote failed");
+    if (!res.ok) {
+      if (json?.code === "TRIAL_RESTRICTED") { window.location.href = "/?subscribe=1&trial_upgrade=1"; return; }
+      return alert(json?.error ?? "Vote failed");
+    }
 
     // optimistic update
     setCoins((prev) =>
@@ -200,7 +203,10 @@ export default function CoinsPage() {
     });
 
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) return alert(json?.error ?? "Comment failed");
+    if (!res.ok) {
+      if (json?.code === "TRIAL_RESTRICTED") { window.location.href = "/?subscribe=1&trial_upgrade=1"; return; }
+      return alert(json?.error ?? "Comment failed");
+    }
 
     setCommentText("");
     await openComments(openCoin);
