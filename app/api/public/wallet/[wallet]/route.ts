@@ -36,12 +36,19 @@ export async function GET(
     const origin = new URL(req.url).origin;
     const sb = supabaseAdmin();
 
-    // ── 1. Fetch all SPL token accounts for this wallet ───────────────────────
-    const tokenAccounts = await rpc(origin, "getTokenAccountsByOwner", [
-      owner,
-      { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
-      { encoding: "jsonParsed", commitment: "confirmed" }
+    // ── 1. Fetch SOL balance + SPL token accounts in parallel ───────────────
+    const [balResult, tokenAccounts] = await Promise.all([
+      rpc(origin, "getBalance", [owner, { commitment: "confirmed" }]),
+      rpc(origin, "getTokenAccountsByOwner", [
+        owner,
+        { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+        { encoding: "jsonParsed", commitment: "confirmed" }
+      ])
     ]);
+
+    const WSOL_MINT = "So11111111111111111111111111111111111111112";
+    const lamports = Number(balResult?.value ?? 0);
+    const sol = lamports / 1_000_000_000;
 
     type RawToken = { mint: string; uiAmount: number; decimals: number };
 
@@ -57,7 +64,7 @@ export async function GET(
       .filter((t: RawToken) => t.mint && t.uiAmount > 0);
 
     if (allTokens.length === 0) {
-      return NextResponse.json({ ok: true, owner, holdings: [] });
+      return NextResponse.json({ ok: true, owner, sol, solUsdPrice, solUsdValue, holdings: [] });
     }
 
     // ── 2. Filter to only mints that exist in the Authswap coins table ─────────
@@ -72,7 +79,7 @@ export async function GET(
 
     const authswapCoins = matchedCoins ?? [];
     if (authswapCoins.length === 0) {
-      return NextResponse.json({ ok: true, owner, holdings: [] });
+      return NextResponse.json({ ok: true, owner, sol, solUsdPrice, solUsdValue, holdings: [] });
     }
 
     // Map mint -> coin db record
@@ -82,17 +89,21 @@ export async function GET(
     const authswapTokens = allTokens.filter((t) => coinByMint.has(t.mint));
     const authswapMints = authswapTokens.map((t) => t.mint);
 
-    // ── 3. Fetch USD prices for matched mints ─────────────────────────────────
+    // ── 3. Fetch USD prices for matched mints + WSOL (for SOL price) ──────────
     let priceMap: Record<string, { usdPrice?: number }> = {};
     try {
+      const priceIds = [WSOL_MINT, ...authswapMints];
       const priceRes = await fetch(
-        `${origin}/api/prices?ids=${encodeURIComponent(authswapMints.join(","))}`,
+        `${origin}/api/prices?ids=${encodeURIComponent(priceIds.join(","))}`,
         { cache: "no-store" }
       );
       if (priceRes.ok) priceMap = await priceRes.json().catch(() => ({}));
     } catch {
       // prices are best-effort — don't fail the whole request
     }
+
+    const solUsdPrice = Number(priceMap?.[WSOL_MINT]?.usdPrice ?? 0) || null;
+    const solUsdValue = solUsdPrice && sol > 0 ? sol * solUsdPrice : null;
 
     // ── 4. Fetch dev profile names + pfp for each coin's dev ─────────────────
     const devWallets = Array.from(new Set(authswapCoins.map((c) => c.wallet)));
@@ -161,6 +172,9 @@ export async function GET(
     return NextResponse.json({
       ok: true,
       owner,
+      sol,
+      solUsdPrice,
+      solUsdValue,
       totalUsd: totalUsd > 0 ? totalUsd : null,
       holdings
     });
