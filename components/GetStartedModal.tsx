@@ -310,31 +310,68 @@ export default function GetStartedModal({
               {loading === "signin" ? "Signing in..." : "Sign in"}
             </button>
           ) : (
-            <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3">
-              <div className="flex items-center justify-between text-sm text-emerald-200">
-                <span>Monthly</span>
-                <span className="font-semibold">
-                  {process.env.NEXT_PUBLIC_SUB_PRICE_SOL ?? "—"} SOL
-                </span>
+            <div className="space-y-3">
+              {/* Paid subscription */}
+              <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3">
+                <div className="flex items-center justify-between text-sm text-emerald-200">
+                  <span>Monthly — full access</span>
+                  <span className="font-semibold">
+                    {process.env.NEXT_PUBLIC_SUB_PRICE_SOL ?? "—"} SOL
+                  </span>
+                </div>
+
+                {subscribeReason === "expired" && expiredAt && (
+                  <p className="mt-2 text-xs text-emerald-200/80">
+                    Expired on: {new Date(expiredAt).toLocaleString()}
+                  </p>
+                )}
+
+                <p className="mt-2 text-xs text-emerald-200/80">
+                  Unlocks everything — dashboard, communities, swaps, reviews — for 30 days.
+                </p>
+
+                <button
+                  className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+                  disabled={loading === "pay"}
+                  onClick={handleStartSubscription}
+                >
+                  {loading === "pay" ? "Processing..." : subscribeBtn}
+                </button>
               </div>
 
-              {subscribeReason === "expired" && expiredAt && (
-                <p className="mt-2 text-xs text-emerald-200/80">
-                  Expired on: {new Date(expiredAt).toLocaleString()}
-                </p>
+              {/* Free trial — only if eligible and not an upgrade prompt */}
+              {trialStatus?.trialEligible && intent !== "upgrade" && (
+                <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                  <div className="flex items-center justify-between text-sm text-zinc-200">
+                    <span>7-day free trial</span>
+                    <span className="text-xs text-zinc-400">Browse only · Free</span>
+                  </div>
+                  <p className="mt-2 text-xs text-zinc-400">
+                    View coins and dev profiles only. No dashboard, communities, or actions. One trial per wallet, forever.
+                  </p>
+                  <button
+                    className="mt-3 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white hover:bg-white/10 disabled:opacity-60 transition"
+                    disabled={loading === "trial"}
+                    onClick={handleStartTrial}
+                  >
+                    {loading === "trial" ? "Activating…" : "Start free trial"}
+                  </button>
+                </div>
               )}
 
-              <p className="mt-2 text-xs text-emerald-200/80">
-                You’ll sign a transaction sending SOL to Authswap. This unlocks access for 30 days.
-              </p>
+              {/* Trial already used */}
+              {trialStatus?.trialExpired && (
+                <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/40 px-3 py-2 text-xs text-zinc-500">
+                  You’ve used your free trial. Subscribe above to continue.
+                </div>
+              )}
 
-              <button
-                className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
-                disabled={loading === "pay"}
-                onClick={handleStartSubscription}
-              >
-                {loading === "pay" ? "Processing..." : subscribeBtn}
-              </button>
+              {/* Upgrade prompt */}
+              {intent === "upgrade" && (
+                <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                  Your free trial doesn’t include this feature. Subscribe for full access.
+                </div>
+              )}
             </div>
           )}
         </div>
