@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import TopNav from "@/components/TopNav";
-import GetStartedModal from "@/components/GetStartedModal";
+import UpgradeModal from "@/components/UpgradeModal";
 import TrialBanner from "@/components/TrialBanner";
 
 type CoinDB = {
@@ -1164,10 +1164,9 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
       </div>
 
       {/* Trial upgrade modal */}
-      <GetStartedModal
+      <UpgradeModal
         open={trialToast}
         onClose={() => setTrialToast(false)}
-        intent="upgrade"
       />
     </main>
   );
