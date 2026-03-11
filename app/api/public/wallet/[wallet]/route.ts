@@ -64,7 +64,7 @@ export async function GET(
       .filter((t: RawToken) => t.mint && t.uiAmount > 0);
 
     if (allTokens.length === 0) {
-      return NextResponse.json({ ok: true, owner, sol, solUsdPrice, solUsdValue, holdings: [] });
+      return NextResponse.json({ ok: true, owner, sol, solUsdPrice: null, solUsdValue: null, holdings: [] });
     }
 
     // ── 2. Filter to only mints that exist in the Authswap coins table ─────────
@@ -79,7 +79,7 @@ export async function GET(
 
     const authswapCoins = matchedCoins ?? [];
     if (authswapCoins.length === 0) {
-      return NextResponse.json({ ok: true, owner, sol, solUsdPrice, solUsdValue, holdings: [] });
+      return NextResponse.json({ ok: true, owner, sol, solUsdPrice: null, solUsdValue: null, holdings: [] });
     }
 
     // Map mint -> coin db record
