@@ -43,29 +43,37 @@ export default function GetStartedModal({
   const shouldPromptSubscribe = useMemo(() => params.get("subscribe") === "1", [params]);
 
   // When modal opens, silently check if already signed in.
-  // If so, skip wallet connect + sign-in steps entirely.
+  // Uses GET /api/me (read-only, no cookie side-effects) to avoid
+  // accidentally redirecting users who have stale/expired cookies.
   useEffect(() => {
     if (!open) return;
 
     (async () => {
       try {
+        // Step 1: lightweight session check — does NOT set any cookies
+        const meRes = await fetch("/api/me", { cache: "no-store" });
+        if (!meRes.ok) return;
+        const me = await meRes.json().catch(() => null);
+        if (!me?.wallet) return; // no valid session — stay on connect step
+
+        // Step 2: now that we know they're signed in, refresh context
         const ctxRes = await fetch("/api/context/refresh", { method: "POST" });
-        if (!ctxRes.ok) return; // not signed in — stay on connect step
+        if (!ctxRes.ok) return;
 
         const ctx = await ctxRes.json().catch(() => null);
         if (!ctx?.ok) return;
 
-        // Already signed in — go to dashboard if full access
+        // Already signed in with full access — go to dashboard
         if (ctx.role === "dev" || ctx.role === "admin" || ctx.subscribedActive) {
           onClose();
           router.push("/dashboard");
           return;
         }
 
-        // Active trial — already have access, go to coins
+        // Active trial — go to dashboard (trial users can see everything now)
         if (ctx.isTrial) {
           onClose();
-          router.push("/coins");
+          router.push("/dashboard");
           return;
         }
 
@@ -161,11 +169,10 @@ export default function GetStartedModal({
         return;
       }
 
-      // If trial is currently active → close modal, they're already signed in with trial access
-      // The middleware will handle routing — just close and let them stay where they are
+      // If trial is currently active → go to dashboard
       if (ctx?.ok && ctx.isTrial) {
         onClose();
-        router.push("/coins");
+        router.push("/dashboard");
         return;
       }
 
@@ -233,12 +240,11 @@ export default function GetStartedModal({
         return;
       }
 
-      // Trial activated — refresh context then do a full navigation to /coins
-      // Must use window.location.href (not router.push) so the browser sends
-      // the newly-set trial sub cookie to the middleware on the next request.
+      // Trial activated — refresh context then navigate to dashboard
+      // Use window.location.href so the browser sends the new trial cookie to middleware
       await fetch("/api/context/refresh", { method: "POST" });
       onClose();
-      window.location.href = "/coins";
+      window.location.href = "/dashboard";
     } catch (e: any) {
       alert(e?.message ?? "Failed to start trial.");
     } finally {
