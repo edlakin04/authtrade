@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import TopNav from "@/components/TopNav";
+import TrialBanner from "@/components/TrialBanner";
 
 type CoinDB = {
   id: string;
@@ -127,6 +128,7 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
   const [coinId, setCoinId] = useState<string>("");
 
   const [viewerWallet, setViewerWallet] = useState<string | null>(null);
+  const [isTrial, setIsTrial] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -206,6 +208,7 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
       if (!res.ok) throw new Error(json?.error || "Failed to load coin");
 
       setViewerWallet(json.viewerWallet ?? null);
+      setIsTrial(!!(json.isTrial ?? false));
       setCoin(json.coin as CoinDB);
 
       // ✅ fetch banner too
@@ -571,6 +574,7 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
       <TopNav />
 
       <div className="mx-auto max-w-5xl px-6 py-10">
+        <TrialBanner isTrial={isTrial} />
         <Link href="/coins" className="text-sm text-zinc-400 hover:text-white">
           ← Back to coins
         </Link>
