@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import TopNav from "@/components/TopNav";
-import GetStartedModal from "@/components/GetStartedModal";
+import UpgradeModal from "@/components/UpgradeModal";
 import Link from "next/link";
 import TrialBanner from "@/components/TrialBanner";
 
@@ -979,10 +979,9 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
       </div>
 
       {/* Trial upgrade modal */}
-      <GetStartedModal
+      <UpgradeModal
         open={trialToast}
         onClose={() => setTrialToast(false)}
-        intent="upgrade"
       />
     </main>
   );
