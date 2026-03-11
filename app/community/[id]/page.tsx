@@ -3,6 +3,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import TopNav from "@/components/TopNav";
+import LiveStreamBroadcaster from "@/components/LiveStreamBroadcaster";
+import LiveStreamViewer from "@/components/LiveStreamViewer";
 
 type PollOption = {
   id: string;
@@ -65,6 +67,16 @@ type LiveMeta = {
   updatedAt?: string;
 };
 
+type LiveStream = {
+  id: string;
+  room_name: string;
+  dev_wallet: string;
+  title: string | null;
+  has_video: boolean;
+  viewer_count: number;
+  started_at: string;
+};
+
 function shortAddr(s: string) {
   if (!s) return "";
   return `${s.slice(0, 4)}…${s.slice(-4)}`;
@@ -112,6 +124,10 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
 
   // coin live meta (for coin image in header)
   const [coinLive, setCoinLive] = useState<LiveMeta | null>(null);
+
+  // live stream state
+  const [liveStream, setLiveStream] = useState<LiveStream | null>(null);
+  const [streamChecked, setStreamChecked] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -213,6 +229,29 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
       cancelled = true;
     };
   }, [data?.coin?.token_address]);
+
+  // Check for active stream on load and poll every 15s
+  async function checkStream() {
+    if (!communityId) return;
+    try {
+      const res = await fetch(`/api/livekit/stream?communityId=${encodeURIComponent(communityId)}`, { cache: "no-store" });
+      const json = await res.json().catch(() => null);
+      if (res.ok) {
+        setLiveStream(json?.stream ?? null);
+        setStreamChecked(true);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  useEffect(() => {
+    if (!communityId) return;
+    checkStream();
+    const t = setInterval(checkStream, 15_000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [communityId]);
 
   useEffect(() => {
     if (!communityId) return;
@@ -630,6 +669,51 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
           </div>
         ) : (
           <>
+            {/* ── Live Stream section ──────────────────────────────────────── */}
+            {streamChecked && isDevViewer && (
+              <div className="mt-6">
+                {liveStream ? (
+                  /* Dev is already live — show broadcaster controls */
+                  <LiveStreamBroadcaster
+                    communityId={communityId}
+                    devWallet={data.community.dev_wallet}
+                    onEnded={() => {
+                      setLiveStream(null);
+                      checkStream();
+                    }}
+                  />
+                ) : (
+                  /* Dev is not live — show go live panel */
+                  <LiveStreamBroadcaster
+                    communityId={communityId}
+                    devWallet={data.community.dev_wallet}
+                    onEnded={() => {
+                      setLiveStream(null);
+                    }}
+                  />
+                )}
+              </div>
+            )}
+
+            {/* Viewer sees the stream when live (and they're a member but not the dev) */}
+            {streamChecked && !isDevViewer && liveStream && (
+              <div className="mt-6">
+                <LiveStreamViewer
+                  communityId={communityId}
+                  stream={{
+                    roomName:    liveStream.room_name,
+                    devWallet:   liveStream.dev_wallet,
+                    title:       liveStream.title,
+                    hasVideo:    liveStream.has_video,
+                    viewerCount: liveStream.viewer_count,
+                    startedAt:   liveStream.started_at,
+                  }}
+                  devName={null}
+                  devPfpUrl={null}
+                />
+              </div>
+            )}
+
             <div className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-4">
               <div className="flex items-center justify-between gap-3 px-2 pb-3">
                 <div className="text-sm font-semibold">Chat</div>
