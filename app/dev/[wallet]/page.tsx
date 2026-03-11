@@ -333,6 +333,7 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
 
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (json?.code === "TRIAL_RESTRICTED") { window.location.href = "/?subscribe=1&trial_upgrade=1"; return; }
         alert(json?.error ?? "Action failed");
         return;
       }
@@ -368,6 +369,7 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
 
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (json?.code === "TRIAL_RESTRICTED") { window.location.href = "/?subscribe=1&trial_upgrade=1"; return; }
         alert(json?.error ?? "Review failed");
         return;
       }
