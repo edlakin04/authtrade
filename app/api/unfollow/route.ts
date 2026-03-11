@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
+import { requireFullAccess } from "@/lib/subscription";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export async function POST(req: Request) {
@@ -10,6 +11,9 @@ export async function POST(req: Request) {
 
   const session = await readSessionToken(sessionToken).catch(() => null);
   if (!session?.wallet) return NextResponse.json({ error: "Invalid session" }, { status: 401 });
+
+  const trialBlock = await requireFullAccess();
+  if (trialBlock) return trialBlock;
 
   const body = await req.json().catch(() => null);
   const devWallet = (body?.devWallet as string | undefined)?.trim();
