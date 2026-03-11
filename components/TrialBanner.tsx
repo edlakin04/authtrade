@@ -84,7 +84,7 @@ export default function TrialBanner({ isTrial, daysRemaining }: Props) {
                 : `${days} day${days === 1 ? "" : "s"} left on your free trial`}
             </div>
             <div className="mt-0.5 text-xs opacity-80">
-              You can browse coins and dev profiles. Subscribe to comment, follow, join communities, and trade.
+              You can browse everything on Authswap. Subscribe to comment, upvote, follow devs, join communities, and trade.
             </div>
           </div>
         </div>
