@@ -82,6 +82,20 @@ export default function LiveStreamBroadcaster({ communityId, devWallet, onEnded 
     }
   }, [state, previewStream]);
 
+  // Attach the local video track to the self-view element after React renders it.
+  // This must be a useEffect — setting srcObject inline after setState("live") races
+  // against the re-render and attaches to the old (unmounted) video element.
+  useEffect(() => {
+    if (state !== "live") return;
+    const videoTrack = videoTrackRef.current;
+    const el = liveVideoRef.current;
+    if (!videoTrack || !el) return;
+
+    const ms = new MediaStream([videoTrack.mediaStreamTrack]);
+    el.srcObject = ms;
+    el.play().catch(() => null); // autoPlay attr handles it but belt-and-suspenders
+  }, [state]); // re-runs when state becomes "live"
+
   // ── Elapsed timer ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (state === "live") {
@@ -182,12 +196,7 @@ export default function LiveStreamBroadcaster({ communityId, devWallet, onEnded 
 
       updateViewerCount();
       setState("live");
-
-      // Attach local video track to self-view element (using raw MediaStreamTrack)
-      if (videoTrack && liveVideoRef.current) {
-        const ms = new MediaStream([videoTrack.mediaStreamTrack]);
-        liveVideoRef.current.srcObject = ms;
-      }
+      // srcObject is attached in a useEffect below, after React renders the video element
 
     } catch (e: any) {
       setErr(e?.message ?? "Failed to go live");
