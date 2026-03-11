@@ -9,11 +9,8 @@ import { ROLE_COOKIE_NAME, readRoleToken } from "@/lib/role";
 // All routes that require at least a session (signed in)
 const PROTECTED_PREFIXES = ["/dashboard", "/coins", "/account", "/subscription", "/dev", "/community", "/trade", "/coin"];
 
-// Routes trial users CAN access (read-only browsing)
-const TRIAL_ALLOWED_PREFIXES = ["/coins", "/coin", "/dev"];
-
-// Routes that require full paid access (trial users blocked → redirect to subscribe)
-const FULL_ACCESS_PREFIXES = ["/dashboard", "/account", "/subscription", "/community", "/trade"];
+// Trial users can access ALL protected routes — actions are blocked at the API level only
+// No TRIAL_ALLOWED_PREFIXES restriction needed
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -53,33 +50,17 @@ export async function middleware(req: NextRequest) {
     return redirectToSubscribe(req, "subscribe");
   }
 
-  // ── 4. Trial users: allow read-only paths, block everything else ───────────
-  if (decodedSub.isTrial) {
-    const isTrialAllowed = TRIAL_ALLOWED_PREFIXES.some((p) => pathname.startsWith(p));
-
-    if (!isTrialAllowed) {
-      // They're trying to access a full-access page on a trial
-      // Redirect to subscribe page with a flag so we show the right message
-      return redirectToSubscribe(req, "trial_upgrade");
-    }
-
-    // Trial allowed — let them through to the read-only page
-    return NextResponse.next();
-  }
-
-  // ── 5. Paid sub — full access ──────────────────────────────────────────────
+  // ── 4. Trial or paid — both get full page access ─────────────────────────
+  // Write actions are blocked at the API level via requireFullAccess()
   return NextResponse.next();
 }
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
-function redirectToSubscribe(req: NextRequest, reason: "subscribe" | "trial_upgrade") {
+function redirectToSubscribe(req: NextRequest, reason: "subscribe" | "trial_upgrade" = "subscribe") {
   const url = req.nextUrl.clone();
   url.pathname = "/";
   url.searchParams.set("subscribe", "1");
-  if (reason === "trial_upgrade") {
-    url.searchParams.set("trial_upgrade", "1");
-  }
   return NextResponse.redirect(url);
 }
 
