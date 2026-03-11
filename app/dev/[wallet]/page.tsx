@@ -194,6 +194,7 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
 
   // Trial state
   const [isTrial, setIsTrial] = useState(false);
+  const [trialToast, setTrialToast] = useState(false);
 
   // Holdings
   const [holdings, setHoldings] = useState<HoldingsPayload | null>(null);
@@ -333,7 +334,7 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
 
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        if (json?.code === "TRIAL_RESTRICTED") { window.location.href = "/?subscribe=1&trial_upgrade=1"; return; }
+        if (json?.code === "TRIAL_RESTRICTED") { setTrialToast(true); return; }
         alert(json?.error ?? "Action failed");
         return;
       }
@@ -369,7 +370,7 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
 
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        if (json?.code === "TRIAL_RESTRICTED") { window.location.href = "/?subscribe=1&trial_upgrade=1"; return; }
+        if (json?.code === "TRIAL_RESTRICTED") { setTrialToast(true); return; }
         alert(json?.error ?? "Review failed");
         return;
       }
@@ -975,6 +976,14 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
           </>
         )}
       </div>
+
+      {trialToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-2xl border border-amber-500/30 bg-zinc-900 px-5 py-3 shadow-2xl">
+          <span className="text-sm text-zinc-200">Free trial can't do this.</span>
+          <a href="/?subscribe=1&trial_upgrade=1" className="rounded-xl bg-white px-3 py-1.5 text-xs font-semibold text-black hover:bg-zinc-200 transition">Subscribe →</a>
+          <button onClick={() => setTrialToast(false)} className="text-zinc-500 hover:text-white text-xs ml-1">✕</button>
+        </div>
+      )}
     </main>
   );
 }
