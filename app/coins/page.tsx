@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import TopNav from "@/components/TopNav";
 import GetStartedModal from "@/components/GetStartedModal";
@@ -45,7 +45,7 @@ function shortAddr(s: string) {
   return `${s.slice(0, 4)}…${s.slice(-4)}`;
 }
 
-export default function CoinsPage() {
+function CoinsPageInner() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
@@ -452,5 +452,13 @@ export default function CoinsPage() {
         intent="upgrade"
       />
     </main>
+  );
+}
+
+export default function CoinsPage() {
+  return (
+    <Suspense fallback={null}>
+      <CoinsPageInner />
+    </Suspense>
   );
 }
