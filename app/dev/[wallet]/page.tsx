@@ -79,6 +79,27 @@ type LiveMeta = {
   image: string | null;
 };
 
+type Holding = {
+  mint: string;
+  uiAmount: number;
+  usdPrice: number | null;
+  usdValue: number | null;
+  coin: {
+    id: string;
+    title: string | null;
+    token_address: string;
+  };
+};
+
+type HoldingsPayload = {
+  ok: true;
+  sol: number;
+  solUsdPrice: number | null;
+  solUsdValue: number | null;
+  totalUsd: number | null;
+  holdings: Holding[];
+};
+
 function shortWallet(w: string) {
   if (!w) return "";
   return w.slice(0, 4) + "…" + w.slice(-4);
@@ -170,6 +191,10 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
   // ✅ poll vote busy keyed by poll id
   const [pollVoteBusyById, setPollVoteBusyById] = useState<Record<string, boolean>>({});
 
+  // Holdings
+  const [holdings, setHoldings] = useState<HoldingsPayload | null>(null);
+  const [holdingsLoading, setHoldingsLoading] = useState(false);
+
   useEffect(() => {
     (async () => {
       const p = await params;
@@ -246,10 +271,22 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
     }
   }
 
+  async function loadHoldings(wallet: string) {
+    setHoldingsLoading(true);
+    try {
+      const res = await fetch(`/api/public/wallet/${encodeURIComponent(wallet)}`, { cache: "no-store" });
+      const json = await res.json().catch(() => null);
+      if (res.ok) setHoldings(json as HoldingsPayload);
+    } finally {
+      setHoldingsLoading(false);
+    }
+  }
+
   useEffect(() => {
     if (!devWallet) return;
     loadDev(devWallet);
     loadReviews(devWallet);
+    loadHoldings(devWallet);
     loadPfp(devWallet);
     loadBanner(devWallet);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -658,7 +695,131 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
               </section>
             </div>
 
-            <div className="mt-6 grid gap-6 lg:grid-cols-2">
+            <div className="mt-6 grid gap-6 lg:grid-cols-3">
+              {/* ── Holdings ──────────────────────────────────────────────── */}
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
+                <h2 className="text-lg font-semibold">Holdings</h2>
+                <p className="mt-0.5 text-xs text-zinc-500">Authswap coins &amp; SOL owned by this dev</p>
+
+                <div className="mt-4 space-y-2">
+                  {holdingsLoading && (
+                    <div className="space-y-2">
+                      {[1,2,3].map(i => (
+                        <div key={i} className="animate-pulse h-14 rounded-xl border border-white/5 bg-white/[0.03]" />
+                      ))}
+                    </div>
+                  )}
+
+                  {!holdingsLoading && holdings && (
+                    <>
+                      {/* SOL row */}
+                      {holdings.sol > 0 && (
+                        <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/30 p-3">
+                          <div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-black/40 flex items-center justify-center">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src="https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png"
+                              alt="SOL"
+                              className="h-6 w-6 object-contain"
+                              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs font-semibold text-white">Solana</span>
+                              <span className="rounded-full border border-white/10 bg-black/30 px-1.5 py-0.5 text-[10px] text-zinc-500">SOL</span>
+                            </div>
+                            <div className="text-[11px] text-zinc-500">
+                              {holdings.sol.toLocaleString(undefined, { maximumFractionDigits: 4 })} SOL
+                            </div>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            {holdings.solUsdValue !== null ? (
+                              <div className="text-xs font-semibold text-white">
+                                {holdings.solUsdValue >= 1000
+                                  ? `$${(holdings.solUsdValue/1000).toFixed(2)}K`
+                                  : holdings.solUsdValue >= 1
+                                  ? `$${holdings.solUsdValue.toFixed(2)}`
+                                  : `$${holdings.solUsdValue.toFixed(4)}`}
+                              </div>
+                            ) : (
+                              <div className="text-xs text-zinc-500">no price</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Authswap coin rows */}
+                      {holdings.holdings.length === 0 && holdings.sol === 0 && (
+                        <div className="text-sm text-zinc-500">No Authswap holdings.</div>
+                      )}
+                      {holdings.holdings.length === 0 && holdings.sol > 0 && (
+                        <div className="text-xs text-zinc-500 pt-1">No Authswap coins held.</div>
+                      )}
+
+                      {holdings.holdings.map((h) => {
+                        const meta = metaByMint[h.mint];
+                        const logo = meta?.image ?? null;
+                        const name = meta?.name || h.coin.title || `${h.mint.slice(0,4)}…${h.mint.slice(-4)}`;
+                        const symbol = meta?.symbol ?? null;
+                        return (
+                          <Link
+                            key={h.mint}
+                            href={`/coin/${encodeURIComponent(h.coin.id)}`}
+                            className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/30 p-3 hover:border-white/20 hover:bg-white/5 transition"
+                          >
+                            <div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-white/5 flex items-center justify-center text-zinc-600 text-sm">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              {logo ? <img src={logo} alt="" className="h-full w-full object-cover" /> : "⎔"}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-xs font-semibold text-white truncate">{name}</span>
+                                {symbol && (
+                                  <span className="rounded-full border border-white/10 bg-black/30 px-1.5 py-0.5 text-[10px] text-zinc-500">{symbol}</span>
+                                )}
+                              </div>
+                              <div className="text-[11px] text-zinc-500">
+                                {h.uiAmount >= 1_000_000
+                                  ? `${(h.uiAmount/1_000_000).toFixed(2)}M`
+                                  : h.uiAmount >= 1_000
+                                  ? `${(h.uiAmount/1_000).toFixed(2)}K`
+                                  : h.uiAmount.toLocaleString(undefined, { maximumFractionDigits: 4 })} {symbol ?? "tokens"}
+                              </div>
+                            </div>
+                            <div className="shrink-0 text-right">
+                              {h.usdValue !== null ? (
+                                <div className="text-xs font-semibold text-white">
+                                  {h.usdValue >= 1000
+                                    ? `$${(h.usdValue/1000).toFixed(2)}K`
+                                    : h.usdValue >= 1
+                                    ? `$${h.usdValue.toFixed(2)}`
+                                    : `$${h.usdValue.toFixed(4)}`}
+                                </div>
+                              ) : (
+                                <div className="text-[11px] text-zinc-500">no price</div>
+                              )}
+                            </div>
+                          </Link>
+                        );
+                      })}
+
+                      {/* Total */}
+                      {holdings.totalUsd !== null && holdings.totalUsd > 0 && (
+                        <div className="mt-1 flex items-center justify-between border-t border-white/10 pt-2">
+                          <span className="text-xs text-zinc-500">Authswap total</span>
+                          <span className="text-xs font-semibold text-white">
+                            {holdings.totalUsd >= 1000
+                              ? `$${(holdings.totalUsd/1000).toFixed(2)}K`
+                              : `$${holdings.totalUsd.toFixed(2)}`}
+                          </span>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </section>
+
               <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
                 <h2 className="text-lg font-semibold">Updates</h2>
                 <div className="mt-4 space-y-2">
