@@ -150,6 +150,7 @@ export default function TopNav() {
   const isDev = ctx?.role === "dev" || ctx?.role === "admin";
 
   return (
+    <>
     <header className="sticky top-0 z-40 border-b border-white/10 bg-zinc-950/70 backdrop-blur">
       <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-6 py-4">
         <div className="flex items-center gap-3">
@@ -285,5 +286,8 @@ export default function TopNav() {
         </div>
       </div>
     </header>
+
+    <UpgradeModal open={upgradeOpen} onClose={() => setUpgradeOpen(false)} />
+    </>
   );
 }
