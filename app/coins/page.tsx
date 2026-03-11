@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import TopNav from "@/components/TopNav";
+import TrialBanner from "@/components/TrialBanner";
 
 type CoinRow = {
   id: string;
@@ -48,6 +49,7 @@ export default function CoinsPage() {
   const [err, setErr] = useState<string | null>(null);
 
   const [viewerWallet, setViewerWallet] = useState<string | null>(null);
+  const [isTrial, setIsTrial] = useState(false);
   const [coins, setCoins] = useState<CoinRow[]>([]);
 
   const [sort, setSort] = useState<"trending" | "newest">("trending");
@@ -79,6 +81,7 @@ export default function CoinsPage() {
       if (!res.ok) throw new Error(json?.error || "Failed to load coins");
 
       setViewerWallet(json.viewerWallet ?? null);
+      setIsTrial(!!(json.isTrial ?? false));
       setCoins((json.coins ?? []) as CoinRow[]);
     } catch (e: any) {
       setErr(e?.message ?? "Failed to load coins");
@@ -212,6 +215,7 @@ export default function CoinsPage() {
       <TopNav />
 
       <div className="mx-auto max-w-6xl px-6 py-10">
+        <TrialBanner isTrial={isTrial} />
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold">Coins</h1>
