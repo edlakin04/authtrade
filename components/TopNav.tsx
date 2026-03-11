@@ -97,6 +97,8 @@ export default function TopNav() {
   // Only fires once we know the user is signed in (ctx loaded)
   useEffect(() => {
     if (!ctx) return;
+    // Reset immediately on ctx change (e.g. wallet swap) so stale dot clears
+    setHasLiveStream(false);
     let cancelled = false;
 
     async function checkLive() {
