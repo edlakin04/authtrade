@@ -29,6 +29,7 @@ export type ChartPayload = {
     h24: number | null;
   };
   updatedAt: string;
+  note?: string;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
