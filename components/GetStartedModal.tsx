@@ -7,7 +7,7 @@ import bs58 from "bs58";
 import { useRouter, useSearchParams } from "next/navigation";
 import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 
-type Step = "connect" | "signin" | "subscribe";
+type Step = "connect" | "signin" | "subscribe" | "trial_active";
 type SubscribeReason = "new" | "expired";
 
 export default function GetStartedModal({
@@ -17,7 +17,7 @@ export default function GetStartedModal({
 }: {
   open: boolean;
   onClose: () => void;
-  intent?: "subscribe" | "trial" | "upgrade" | null;
+  intent?: "subscribe" | "trial" | "upgrade" | "trial_active" | null;
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -102,10 +102,15 @@ export default function GetStartedModal({
         return;
       }
 
-      // If trial is currently active → go to dashboard
+      // If trial is currently active → show trial status step (continue or upgrade)
       if (ctx?.ok && ctx.isTrial) {
-        onClose();
-        router.push("/dashboard");
+        setTrialStatus({
+          trialEligible: false,
+          trialActive:   true,
+          trialExpired:  false,
+          daysRemaining: ctx.daysRemaining ?? 0,
+        });
+        setStep("trial_active");
         return;
       }
 
@@ -251,7 +256,7 @@ export default function GetStartedModal({
   const connected = !!publicKey;
 
   const subscribeTitle =
-    intent === "upgrade"       ? "Upgrade to full access" :
+    intent === "upgrade"          ? "Upgrade to full access" :
     subscribeReason === "expired" ? "Subscription expired"  : "Get started";
 
   const subscribeDesc =
@@ -262,6 +267,8 @@ export default function GetStartedModal({
   const subscribeBtn =
     subscribeReason === "expired" ? "Renew subscription" : "Subscribe now";
 
+  const daysLeft = trialStatus?.daysRemaining ?? 0;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
       <div className="w-full max-w-md rounded-2xl border border-white/10 bg-zinc-950 p-6 shadow-2xl">
@@ -271,11 +278,13 @@ export default function GetStartedModal({
               {step === "connect" && "Connect wallet"}
               {step === "signin" && "Sign in"}
               {step === "subscribe" && subscribeTitle}
+              {step === "trial_active" && "You're on a free trial"}
             </h2>
             <p className="mt-1 text-sm text-zinc-300">
               {step === "connect" && "Connect your Solana wallet to continue."}
               {step === "signin" && "Sign a message to prove wallet ownership. No transactions."}
               {step === "subscribe" && subscribeDesc}
+              {step === "trial_active" && `${daysLeft} day${daysLeft === 1 ? "" : "s"} remaining. Continue browsing or upgrade for full access.`}
             </p>
           </div>
 
@@ -306,6 +315,34 @@ export default function GetStartedModal({
             <p className="text-xs text-zinc-400">
               Supported: Phantom, Solflare, Trust, Coinbase Wallet.
             </p>
+          ) : step === "trial_active" ? (
+            <div className="space-y-3">
+              {/* Continue with trial */}
+              <button
+                className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white hover:bg-white/10 transition"
+                onClick={() => { onClose(); router.push("/dashboard"); }}
+              >
+                Continue with free trial →
+              </button>
+
+              {/* Upgrade */}
+              <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3">
+                <div className="flex items-center justify-between text-sm text-emerald-200">
+                  <span>Monthly — full access</span>
+                  <span className="font-semibold">{process.env.NEXT_PUBLIC_SUB_PRICE_SOL ?? "—"} SOL</span>
+                </div>
+                <p className="mt-2 text-xs text-emerald-200/80">
+                  Unlocks comments, upvotes, communities, follows, reviews, and swaps for 30 days.
+                </p>
+                <button
+                  className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
+                  disabled={loading === "pay"}
+                  onClick={handleStartSubscription}
+                >
+                  {loading === "pay" ? "Processing..." : "Subscribe now"}
+                </button>
+              </div>
+            </div>
           ) : step !== "subscribe" ? (
             <button
               className="w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
