@@ -79,7 +79,6 @@ export async function POST(req: Request) {
       .from("live_streams")
       .select("id, room_name")
       .eq("community_id", communityId)
-      .eq("status", "live")
       .maybeSingle();
 
     if (existing) {
@@ -190,29 +189,27 @@ export async function DELETE(req: Request) {
     // ── Find the stream ────────────────────────────────────────────────────
     const { data: stream, error: findErr } = await sb
       .from("live_streams")
-      .select("id, dev_wallet, status")
+      .select("id, dev_wallet")
       .eq("room_name", roomName)
       .eq("community_id", communityId)
       .maybeSingle();
 
     if (findErr) return NextResponse.json({ error: findErr.message }, { status: 500 });
-    if (!stream) return NextResponse.json({ error: "Stream not found" }, { status: 404 });
+    // Row already gone — stream was already ended
+    if (!stream) return NextResponse.json({ ok: true, alreadyEnded: true });
 
     if (stream.dev_wallet !== devWallet) {
       return NextResponse.json({ error: "Only the dev who started the stream can end it" }, { status: 403 });
     }
 
-    if (stream.status === "ended") {
-      return NextResponse.json({ ok: true, alreadyEnded: true });
-    }
-
-    // ── Mark stream ended in DB ────────────────────────────────────────────
-    const { error: updateErr } = await sb
+    // ── Delete the row from DB ─────────────────────────────────────────────
+    // Ended streams have no use — delete outright instead of updating status.
+    const { error: deleteErr } = await sb
       .from("live_streams")
-      .update({ status: "ended", ended_at: new Date().toISOString() })
+      .delete()
       .eq("id", stream.id);
 
-    if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 });
+    if (deleteErr) return NextResponse.json({ error: deleteErr.message }, { status: 500 });
 
     // ── Delete the LiveKit room (kicks all participants) ───────────────────
     try {
@@ -248,11 +245,11 @@ export async function GET(req: Request) {
 
     const sb = supabaseAdmin();
 
+    // Any row in live_streams is by definition live — ended rows are deleted
     const { data: stream, error } = await sb
       .from("live_streams")
       .select("id, room_name, dev_wallet, title, has_video, viewer_count, started_at")
       .eq("community_id", communityId)
-      .eq("status", "live")
       .maybeSingle();
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
