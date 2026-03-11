@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import UpgradeModal from "@/components/UpgradeModal";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import bs58 from "bs58";
@@ -33,6 +34,8 @@ export default function GetStartedModal({
   const [expiredAt, setExpiredAt] = useState<string | null>(null);
 
   // Trial state (read from server after sign-in)
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
+
   const [trialStatus, setTrialStatus] = useState<{
     trialEligible: boolean;
     trialActive: boolean;
@@ -325,23 +328,13 @@ export default function GetStartedModal({
                 Continue with free trial →
               </button>
 
-              {/* Upgrade */}
-              <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3">
-                <div className="flex items-center justify-between text-sm text-emerald-200">
-                  <span>Monthly — full access</span>
-                  <span className="font-semibold">{process.env.NEXT_PUBLIC_SUB_PRICE_SOL ?? "—"} SOL</span>
-                </div>
-                <p className="mt-2 text-xs text-emerald-200/80">
-                  Unlocks comments, upvotes, communities, follows, reviews, and swaps for 30 days.
-                </p>
-                <button
-                  className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
-                  disabled={loading === "pay"}
-                  onClick={handleStartSubscription}
-                >
-                  {loading === "pay" ? "Processing..." : "Subscribe now"}
-                </button>
-              </div>
+              {/* Upgrade — opens dedicated UpgradeModal */}
+              <button
+                className="w-full rounded-xl bg-white px-4 py-3 text-sm font-semibold text-black hover:bg-zinc-200 transition"
+                onClick={() => setUpgradeOpen(true)}
+              >
+                Subscribe for full access →
+              </button>
             </div>
           ) : step !== "subscribe" ? (
             <button
@@ -428,5 +421,7 @@ export default function GetStartedModal({
         )}
       </div>
     </div>
+
+    <UpgradeModal open={upgradeOpen} onClose={() => setUpgradeOpen(false)} />
   );
 }
