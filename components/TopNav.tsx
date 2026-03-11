@@ -44,13 +44,14 @@ function Tab({
 }
 
 export default function TopNav() {
-  const pathname = usePathname();
   const router = useRouter();
   const [ctx, setCtx] = useState<Ctx | null>(null);
   const [unseenCount, setUnseenCount] = useState(0);
   const [collabPendingCount, setCollabPendingCount] = useState(0);
   const [hasLiveStream, setHasLiveStream] = useState(false);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const [liveCommunityIds, setLiveCommunityIds] = useState<string[]>([]);
+  const pathname = usePathname();
 
   useEffect(() => {
     fetch("/api/context/refresh", { method: "POST" })
@@ -132,11 +133,25 @@ export default function TopNav() {
           )
         );
 
-        const anyLive = results.some(
-          (r) => r.status === "fulfilled" && r.value?.stream !== null && r.value?.stream !== undefined
-        );
+        const liveIds = communities
+          .filter((c, i) => {
+            const r = results[i];
+            return r.status === "fulfilled" && r.value?.stream !== null && r.value?.stream !== undefined;
+          })
+          .map((c) => c.id);
 
-        if (!cancelled) setHasLiveStream(anyLive);
+        if (!cancelled) {
+          setLiveCommunityIds(liveIds);
+
+          // Only show the dot for communities the user hasn't visited yet.
+          // If they're currently on a community page, that community is "seen".
+          // Seen IDs are stored in sessionStorage so they persist across nav within the tab.
+          const seenRaw = sessionStorage.getItem("seenLiveCommunities") ?? "[]";
+          const seen: string[] = JSON.parse(seenRaw).catch ? [] : JSON.parse(seenRaw);
+
+          const unseenLive = liveIds.filter((id) => !seen.includes(id));
+          setHasLiveStream(unseenLive.length > 0);
+        }
       } catch {
         // silently ignore
       }
@@ -146,6 +161,38 @@ export default function TopNav() {
     const interval = setInterval(checkLive, 20_000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [ctx]);
+
+  // Mark community as "seen" when the user is on its page — clears the live dot
+  useEffect(() => {
+    const match = pathname.match(/^\/community\/([^/]+)/);
+    if (!match) return;
+    const communityId = match[1];
+
+    try {
+      const seenRaw = sessionStorage.getItem("seenLiveCommunities") ?? "[]";
+      const seen: string[] = JSON.parse(seenRaw);
+      if (!seen.includes(communityId)) {
+        seen.push(communityId);
+        sessionStorage.setItem("seenLiveCommunities", JSON.stringify(seen));
+      }
+    } catch { /* ignore */ }
+
+    // If this is a live community, clear the dot immediately
+    setLiveCommunityIds((prev) => {
+      const stillLive = prev.filter((id) => {
+        if (id !== communityId) return true;
+        return false; // suppress dot for this community
+      });
+      // Recheck if any unseen live streams remain
+      try {
+        const seenRaw = sessionStorage.getItem("seenLiveCommunities") ?? "[]";
+        const seen: string[] = JSON.parse(seenRaw);
+        const hasUnseen = stillLive.some((id) => !seen.includes(id));
+        setHasLiveStream(hasUnseen);
+      } catch { /* ignore */ }
+      return prev; // don't mutate liveCommunityIds, just update hasLiveStream
+    });
+  }, [pathname]);
 
   const isDev = ctx?.role === "dev" || ctx?.role === "admin";
 
