@@ -449,6 +449,7 @@ export default function DashboardPage() {
     (goldenHourAd?.coin?.token_address ? metaByMint[goldenHourAd.coin.token_address]?.symbol : null) || null;
 
   return (
+    <>
     <main className="min-h-screen bg-authswap text-white">
       <TopNav />
 
@@ -786,6 +787,7 @@ export default function DashboardPage() {
       </div>
     </main>
 
-      <UpgradeModal open={trialToast} onClose={() => setTrialToast(false)} />
+    <UpgradeModal open={trialToast} onClose={() => setTrialToast(false)} />
+    </>
   );
 }
