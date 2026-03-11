@@ -23,7 +23,10 @@
     "pino-pretty": "^13.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "tweetnacl": "^1.0.3"
+    "tweetnacl": "^1.0.3",
+    "livekit-client": "^2.5.3",
+    "livekit-server-sdk": "^2.6.1",
+    "@livekit/components-react": "^2.6.4"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
