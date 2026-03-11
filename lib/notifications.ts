@@ -7,7 +7,8 @@ export type NotificationType =
   | "collab_accepted"
   | "collab_declined"
   | "collab_launched"
-  | "collab_cancelled";
+  | "collab_cancelled"
+  | "stream_started";
 
 // ─── Follower fan-out ─────────────────────────────────────────────────────────
 // Used by /api/dev/posts and /api/dev/coins.
