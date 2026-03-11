@@ -191,6 +191,9 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
   // ✅ poll vote busy keyed by poll id
   const [pollVoteBusyById, setPollVoteBusyById] = useState<Record<string, boolean>>({});
 
+  // Trial state
+  const [isTrial, setIsTrial] = useState(false);
+
   // Holdings
   const [holdings, setHoldings] = useState<HoldingsPayload | null>(null);
   const [holdingsLoading, setHoldingsLoading] = useState(false);
@@ -281,6 +284,15 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
       setHoldingsLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (!devWallet) return;
+    // Fetch trial state from context
+    fetch("/api/context/refresh", { method: "POST" })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d?.ok) setIsTrial(!!d.isTrial); })
+      .catch(() => null);
+  }, [devWallet]);
 
   useEffect(() => {
     if (!devWallet) return;
@@ -504,6 +516,7 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
       </div>
 
       <div className="mx-auto max-w-5xl px-6 py-10">
+        <TrialBanner isTrial={isTrial} />
         <div className="flex items-start justify-between gap-4">
           <div>
             <Link href="/dashboard" className="text-sm text-zinc-400 hover:text-white">
