@@ -39,12 +39,13 @@ export default function LiveStreamBroadcaster({ communityId, devWallet, onEnded 
   const [camOff, setCamOff]         = useState(false);
   const [elapsed, setElapsed]       = useState(0); // seconds since went live
 
-  const roomRef       = useRef<Room | null>(null);
-  const audioTrackRef = useRef<LocalAudioTrack | null>(null);
-  const videoTrackRef = useRef<LocalVideoTrack | null>(null);
+  const roomRef         = useRef<Room | null>(null);
+  const audioTrackRef   = useRef<LocalAudioTrack | null>(null);
+  const videoTrackRef   = useRef<LocalVideoTrack | null>(null);
   const videoPreviewRef = useRef<HTMLVideoElement>(null);
-  const timerRef      = useRef<ReturnType<typeof setInterval> | null>(null);
-  const startTimeRef  = useRef<number>(0);
+  const liveVideoRef    = useRef<HTMLVideoElement>(null); // self-view while live
+  const timerRef        = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startTimeRef    = useRef<number>(0);
 
   // ── Preview video in setup screen ─────────────────────────────────────────
   const [previewStream, setPreviewStream] = useState<MediaStream | null>(null);
@@ -181,6 +182,12 @@ export default function LiveStreamBroadcaster({ communityId, devWallet, onEnded 
 
       updateViewerCount();
       setState("live");
+
+      // Attach local video track to self-view element (using raw MediaStreamTrack)
+      if (videoTrack && liveVideoRef.current) {
+        const ms = new MediaStream([videoTrack.mediaStreamTrack]);
+        liveVideoRef.current.srcObject = ms;
+      }
 
     } catch (e: any) {
       setErr(e?.message ?? "Failed to go live");
@@ -359,6 +366,31 @@ export default function LiveStreamBroadcaster({ communityId, devWallet, onEnded 
             {state === "ending" ? "Ending…" : "End Stream"}
           </button>
         </div>
+
+        {/* Self-view — only shown when video is enabled */}
+        {hasVideo && (
+          <div className="relative mx-4 mb-3 overflow-hidden rounded-xl border border-white/10 bg-black aspect-video">
+            <video
+              ref={liveVideoRef}
+              autoPlay
+              muted
+              playsInline
+              className={[
+                "h-full w-full object-cover scale-x-[-1] transition-opacity duration-300",
+                camOff ? "opacity-0" : "opacity-100"
+              ].join(" ")}
+            />
+            {camOff && (
+              <div className="absolute inset-0 flex items-center justify-center text-xs text-zinc-600">
+                📷 Camera off
+              </div>
+            )}
+            {/* PIP label */}
+            <div className="absolute bottom-2 left-2 rounded-lg bg-black/60 px-2 py-0.5 text-[10px] text-zinc-400 backdrop-blur">
+              Your stream preview
+            </div>
+          </div>
+        )}
 
         <div className="px-4 pb-3 text-[11px] text-zinc-600">
           {micMuted && <span className="text-red-400">🎙 Muted · </span>}
