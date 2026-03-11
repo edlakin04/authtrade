@@ -128,6 +128,7 @@ export default function AccountPage() {
   const [commLoading, setCommLoading] = useState(false);
   const [commErr, setCommErr] = useState<string | null>(null);
   const [communities, setCommunities] = useState<MyCommunitiesPayload["communities"]>([]);
+  const [commTab, setCommTab] = useState<"all" | "mine">("all");
 
   // Following state
   const [followLoading, setFollowLoading] = useState(false);
@@ -489,35 +490,84 @@ export default function AccountPage() {
         {tab === "communities" && (
           <div className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-5">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Communities</h2>
+              <h2 className="text-lg font-semibold">
+                {commTab === "mine" ? "My Communities" : "Communities"}
+              </h2>
               <span className="text-xs text-zinc-400">{commLoading ? "Loading…" : ""}</span>
             </div>
+
+            {/* Sub-tabs — only shown to devs */}
+            {isDev && (
+              <div className="mt-4 flex gap-2">
+                <button
+                  onClick={() => setCommTab("all")}
+                  className={[
+                    "rounded-xl px-3 py-1.5 text-xs font-semibold border transition",
+                    commTab === "all"
+                      ? "bg-white text-black border-white"
+                      : "bg-white/5 text-white border-white/10 hover:bg-white/10"
+                  ].join(" ")}
+                >
+                  Communities
+                </button>
+                <button
+                  onClick={() => setCommTab("mine")}
+                  className={[
+                    "rounded-xl px-3 py-1.5 text-xs font-semibold border transition",
+                    commTab === "mine"
+                      ? "bg-white text-black border-white"
+                      : "bg-white/5 text-white border-white/10 hover:bg-white/10"
+                  ].join(" ")}
+                >
+                  My Communities
+                </button>
+              </div>
+            )}
+
             {commErr && (
               <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-4">
                 <p className="text-sm text-red-200">{commErr}</p>
               </div>
             )}
-            <div className="mt-4 space-y-2">
-              {communities.length === 0 && !commLoading ? (
-                <div className="text-sm text-zinc-500">You haven't joined any communities yet. Join one from a coin page.</div>
-              ) : (
-                communities.map((c) => (
-                  <Link key={c.id} href={`/community/${encodeURIComponent(c.id)}`} className="block rounded-2xl border border-white/10 bg-black/30 p-4 hover:bg-black/40 transition">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <div className="truncate text-sm font-semibold">{c.title || "Coin community"}</div>
-                          <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-zinc-300">{c.viewerRole === "dev" ? "Owner" : "Member"}</span>
-                        </div>
-                        <div className="mt-1 text-xs text-zinc-500">Coin: <span className="font-mono text-zinc-400">{shortAddr(c.coin_id)}</span></div>
-                      </div>
-                      <span className="shrink-0 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs hover:bg-white/10">Open →</span>
+
+            {(() => {
+              const displayed = commTab === "mine"
+                ? communities.filter((c) => c.viewerRole === "dev")
+                : communities;
+
+              return (
+                <div className="mt-4 space-y-2">
+                  {displayed.length === 0 && !commLoading ? (
+                    <div className="text-sm text-zinc-500">
+                      {commTab === "mine"
+                        ? "You haven't launched any communities yet. Create one from your dev profile."
+                        : "You haven't joined any communities yet. Join one from a coin page."}
                     </div>
-                  </Link>
-                ))
-              )}
-            </div>
-            <p className="mt-4 text-xs text-zinc-500">Communities are private — you can only view messages after joining.</p>
+                  ) : (
+                    displayed.map((c) => (
+                      <Link key={c.id} href={`/community/${encodeURIComponent(c.id)}`} className="block rounded-2xl border border-white/10 bg-black/30 p-4 hover:bg-black/40 transition">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="truncate text-sm font-semibold">{c.title || "Coin community"}</div>
+                              <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-zinc-300">{c.viewerRole === "dev" ? "Owner" : "Member"}</span>
+                            </div>
+                            <div className="mt-1 text-xs text-zinc-500">Coin: <span className="font-mono text-zinc-400">{shortAddr(c.coin_id)}</span></div>
+                          </div>
+                          <span className="shrink-0 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs hover:bg-white/10">Open →</span>
+                        </div>
+                      </Link>
+                    ))
+                  )}
+                </div>
+              );
+            })()}
+
+            <p className="mt-4 text-xs text-zinc-500">
+              {commTab === "mine"
+                ? "These are the communities attached to coins you've posted."
+                : "Communities are private — you can only view messages after joining."}
+            </p>
           </div>
         )}
 
