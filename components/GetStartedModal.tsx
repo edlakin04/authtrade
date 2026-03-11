@@ -90,13 +90,21 @@ export default function GetStartedModal({
       }
 
       const ctx = (await ctxRes.json().catch(() => null)) as
-        | { ok: true; role: "user" | "dev" | "admin"; subscribedActive: boolean }
+        | { ok: true; role: "user" | "dev" | "admin"; subscribedActive: boolean; isTrial: boolean; trialActive: boolean; trialExpired: boolean; trialEligible: boolean; daysRemaining: number }
         | null;
 
       // If dev/admin or already subscribed → go dashboard
       if (ctx?.ok && (ctx.role === "dev" || ctx.role === "admin" || ctx.subscribedActive)) {
         onClose();
         router.push("/dashboard");
+        return;
+      }
+
+      // If trial is currently active → they're already on a trial, send them to /coins
+      // (they hit this path when a blocked action redirected them here)
+      if (ctx?.ok && ctx.isTrial) {
+        onClose();
+        window.location.href = "/coins";
         return;
       }
 
