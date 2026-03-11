@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import TopNav from "@/components/TopNav";
+import UpgradeModal from "@/components/UpgradeModal";
 import Link from "next/link";
 
 type PollOption = {
@@ -92,6 +93,7 @@ export default function DashboardPage() {
 
   // ✅ poll vote busy keyed by poll id
   const [pollVoteBusyById, setPollVoteBusyById] = useState<Record<string, boolean>>({});
+  const [trialToast, setTrialToast] = useState(false);
 
   useEffect(() => {
     fetch("/api/public/dashboard", { cache: "no-store" })
@@ -300,6 +302,7 @@ export default function DashboardPage() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (json?.code === "TRIAL_RESTRICTED") { setTrialToast(true); return; }
         alert(json?.error ?? "Vote failed");
         return;
       }
@@ -782,5 +785,7 @@ export default function DashboardPage() {
         )}
       </div>
     </main>
+
+      <UpgradeModal open={trialToast} onClose={() => setTrialToast(false)} />
   );
 }
