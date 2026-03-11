@@ -50,9 +50,11 @@ function CoinsPageInner() {
   const [err, setErr] = useState<string | null>(null);
 
   const [viewerWallet, setViewerWallet] = useState<string | null>(null);
+  const [viewerRole, setViewerRole] = useState<string | null>(null);
   const [isTrial, setIsTrial] = useState(false);
   const [trialToast, setTrialToast] = useState(false);
   const [coins, setCoins] = useState<CoinRow[]>([]);
+  const [coinsTab, setCoinsTab] = useState<"all" | "mine">("all");
 
   const [sort, setSort] = useState<"trending" | "newest">("trending");
   const [q, setQ] = useState("");
@@ -83,6 +85,7 @@ function CoinsPageInner() {
       if (!res.ok) throw new Error(json?.error || "Failed to load coins");
 
       setViewerWallet(json.viewerWallet ?? null);
+      setViewerRole(json.viewerRole ?? null);
       setIsTrial(!!(json.isTrial ?? false));
       setCoins((json.coins ?? []) as CoinRow[]);
     } catch (e: any) {
@@ -218,16 +221,49 @@ function CoinsPageInner() {
     );
   }
 
+  // Filter coins for "My Coins" tab
+  const displayedCoins = coinsTab === "mine" && viewerWallet
+    ? coins.filter((c) => c.dev_wallet === viewerWallet)
+    : coins;
+
   return (
     <main className="min-h-screen bg-authswap text-white">
       <TopNav />
 
       <div className="mx-auto max-w-6xl px-6 py-10">
         <TrialBanner isTrial={isTrial} />
+        {/* Coins / My Coins tab — only shown to devs */}
+        {viewerRole === "dev" || viewerRole === "admin" ? (
+          <div className="mb-5 flex gap-2">
+            <button
+              onClick={() => setCoinsTab("all")}
+              className={[
+                "rounded-xl px-4 py-2 text-sm font-semibold border transition",
+                coinsTab === "all"
+                  ? "bg-white text-black border-white"
+                  : "bg-white/5 text-white border-white/10 hover:bg-white/10"
+              ].join(" ")}
+            >
+              Coins
+            </button>
+            <button
+              onClick={() => setCoinsTab("mine")}
+              className={[
+                "rounded-xl px-4 py-2 text-sm font-semibold border transition",
+                coinsTab === "mine"
+                  ? "bg-white text-black border-white"
+                  : "bg-white/5 text-white border-white/10 hover:bg-white/10"
+              ].join(" ")}
+            >
+              My Coins
+            </button>
+          </div>
+        ) : null}
+
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-semibold">Coins</h1>
-            <p className="mt-1 text-sm text-zinc-400">Upvote and discuss coins posted by devs.</p>
+            <h1 className="text-2xl font-semibold">{coinsTab === "mine" ? "My Coins" : "Coins"}</h1>
+            <p className="mt-1 text-sm text-zinc-400">{coinsTab === "mine" ? "Coins you have posted." : "Upvote and discuss coins posted by devs."}</p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -274,12 +310,14 @@ function CoinsPageInner() {
           <div className="mt-6 text-zinc-400">Loading…</div>
         ) : (
           <div className="mt-6 grid gap-3">
-            {coins.length === 0 ? (
+            {displayedCoins.length === 0 ? (
               <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-sm text-zinc-400">
-                No coins found.
+                {coinsTab === "mine"
+                  ? "You haven't posted any coins yet. Post one from your dev profile."
+                  : "No coins found."}
               </div>
             ) : (
-              coins.map((c) => {
+              displayedCoins.map((c) => {
                 // ensure live meta as rows render (covers >60)
                 ensureLive(c.token_address);
 
