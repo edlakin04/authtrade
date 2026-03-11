@@ -14,11 +14,24 @@ export default function HomeClient() {
   const [openInvite, setOpenInvite] = useState(false);
   const [openBecomeDev, setOpenBecomeDev] = useState(false);
 
+  // What triggered the modal — used to show the right messaging
+  const [modalIntent, setModalIntent] = useState<"subscribe" | "trial" | "upgrade" | null>(null);
+
   useEffect(() => {
-    const subscribe = searchParams.get("subscribe") === "1";
-    const getstarted = searchParams.get("getstarted") === "1";
-    if (subscribe || getstarted) setOpenGetStarted(true);
+    const subscribe     = searchParams.get("subscribe")     === "1";
+    const getstarted    = searchParams.get("getstarted")    === "1";
+    const trialUpgrade  = searchParams.get("trial_upgrade") === "1";
+
+    if (trialUpgrade) {
+      setModalIntent("upgrade");
+      setOpenGetStarted(true);
+    } else if (subscribe || getstarted) {
+      setModalIntent("subscribe");
+      setOpenGetStarted(true);
+    }
   }, [searchParams]);
+
+  const isTrialUpgrade = modalIntent === "upgrade";
 
   return (
     <main className="bg-authswap min-h-screen text-white">
@@ -38,19 +51,31 @@ export default function HomeClient() {
           <span className="text-gradient font-semibold">trending coins</span> — with swaps powered by Jupiter.
         </p>
 
-        <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
+        {/* ── CTAs ──────────────────────────────────────────────────────────── */}
+        <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-start">
+          {/* Primary — subscribe now */}
           <button
-            onClick={() => setOpenGetStarted(true)}
-            className="rounded-2xl bg-white px-6 py-3 text-sm font-semibold text-black hover:bg-zinc-200"
+            onClick={() => { setModalIntent("subscribe"); setOpenGetStarted(true); }}
+            className="rounded-2xl bg-white px-6 py-3 text-sm font-semibold text-black hover:bg-zinc-200 transition"
           >
-            Get started
+            Subscribe now
           </button>
 
-          <div className="text-sm text-zinc-400">
-            Connect wallet → sign in → subscribe (or dev access) → dashboard
-          </div>
+          {/* Secondary — free trial */}
+          <button
+            onClick={() => { setModalIntent("trial"); setOpenGetStarted(true); }}
+            className="rounded-2xl border border-white/20 bg-white/5 px-6 py-3 text-sm font-semibold text-white hover:bg-white/10 transition"
+          >
+            Start 7-day free trial
+          </button>
         </div>
 
+        {/* Trial disclaimer */}
+        <p className="mt-3 text-xs text-zinc-500">
+          Free trial lets you browse coins and dev profiles only. One trial per wallet. No card required.
+        </p>
+
+        {/* ── Feature cards ──────────────────────────────────────────────────── */}
         <div className="mt-10 grid gap-4 md:grid-cols-3">
           {[
             { title: "Verified dev profiles", body: "Follow devs, see posted coins, and watch upcoming projects." },
@@ -64,7 +89,44 @@ export default function HomeClient() {
           ))}
         </div>
 
-        <GetStartedModal open={openGetStarted} onClose={() => setOpenGetStarted(false)} />
+        {/* ── What's included comparison ─────────────────────────────────────── */}
+        <div className="mt-12 rounded-2xl border border-white/10 bg-white/5 p-6">
+          <h2 className="text-lg font-semibold mb-4">What's included</h2>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {[
+              { label: "Browse coins & dev profiles",  trial: true,  paid: true  },
+              { label: "Live price charts & trades",   trial: true,  paid: true  },
+              { label: "Dashboard & following feed",   trial: false, paid: true  },
+              { label: "Join & post in communities",   trial: false, paid: true  },
+              { label: "Comment & upvote coins",       trial: false, paid: true  },
+              { label: "Leave dev reviews",            trial: false, paid: true  },
+              { label: "Follow devs",                  trial: false, paid: true  },
+              { label: "Jupiter swap inside Authswap", trial: false, paid: true  },
+            ].map((row) => (
+              <div key={row.label} className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-black/20 px-3 py-2">
+                <span className="text-sm text-zinc-300">{row.label}</span>
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className="text-xs text-zinc-500 w-10 text-center">
+                    {row.trial ? <span className="text-emerald-400">✓</span> : <span className="text-zinc-600">—</span>}
+                  </span>
+                  <span className="text-xs text-zinc-500 w-10 text-center">
+                    {row.paid ? <span className="text-emerald-400">✓</span> : <span className="text-zinc-600">—</span>}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex justify-end gap-3 text-xs text-zinc-500">
+            <span className="w-10 text-center">Trial</span>
+            <span className="w-10 text-center">Paid</span>
+          </div>
+        </div>
+
+        <GetStartedModal
+          open={openGetStarted}
+          onClose={() => { setOpenGetStarted(false); setModalIntent(null); }}
+          intent={modalIntent}
+        />
         <InviteCodeModal open={openInvite} onClose={() => setOpenInvite(false)} />
         <BecomeDevModal open={openBecomeDev} onClose={() => setOpenBecomeDev(false)} />
 
