@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
+import { requireFullAccess } from "@/lib/subscription";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const dynamic = "force-dynamic";
@@ -56,6 +57,9 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
   const sb = supabaseAdmin();
   const viewerWallet = await getViewerWallet();
   if (!viewerWallet) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+
+  const trialBlock = await requireFullAccess();
+  if (trialBlock) return trialBlock;
 
   const { id } = await ctx.params;
   const coin_id = decodeURIComponent(id || "").trim();
