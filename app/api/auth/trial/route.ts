@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
-import { createSubToken, subCookie } from "@/lib/subscription";
+import { createTrialSubToken, subCookie } from "@/lib/subscription";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const dynamic = "force-dynamic";
@@ -107,9 +107,9 @@ export async function POST() {
     // The middleware just checks paidUntilMs > now — it doesn't care if it's
     // a trial or paid. The isTrial flag is read by the frontend (context/refresh)
     // to show the trial banner and block write actions at the API level.
-    const subToken = await createSubToken({
+    const subToken = await createTrialSubToken({
       wallet,
-      paidUntilMs: trialEndsAtMs,
+      trialStartedAtMs: now.getTime(),
     });
 
     const res = NextResponse.json({
