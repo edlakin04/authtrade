@@ -164,10 +164,12 @@ export default function GetStartedModal({
         return;
       }
 
-      // Trial activated — refresh context then go to coins (trial landing)
+      // Trial activated — refresh context then do a full navigation to /coins
+      // Must use window.location.href (not router.push) so the browser sends
+      // the newly-set trial sub cookie to the middleware on the next request.
       await fetch("/api/context/refresh", { method: "POST" });
       onClose();
-      router.push("/coins");
+      window.location.href = "/coins";
     } catch (e: any) {
       alert(e?.message ?? "Failed to start trial.");
     } finally {
