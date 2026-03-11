@@ -76,3 +76,41 @@ export function clearSubCookie() {
 export function trialEndsAtMs(trialStartedAtMs: number): number {
   return trialStartedAtMs + TRIAL_DAYS * 24 * 60 * 60 * 1000;
 }
+
+// ─── Trial gate helper ────────────────────────────────────────────────────────
+// Import and call at the top of any write API route to block trial users.
+// Returns a NextResponse 403 if trial user, null if full access.
+//
+// Usage in any route:
+//   import { requireFullAccess } from "@/lib/subscription";
+//   const blocked = await requireFullAccess();
+//   if (blocked) return blocked;
+
+import { cookies } from "next/headers";
+import { NextResponse } from "next/server";
+
+export async function requireFullAccess(): Promise<Response | null> {
+  try {
+    const cookieStore = await cookies();
+    const subToken = cookieStore.get(SUB_COOKIE_NAME)?.value;
+    if (!subToken) return null; // no token — route's own auth handles it
+
+    const decoded = await readSubToken(subToken).catch(() => null);
+    if (!decoded) return null; // invalid token — route's own auth handles it
+
+    if (decoded.isTrial) {
+      return NextResponse.json(
+        {
+          error:   "Free trial accounts cannot perform this action.",
+          code:    "TRIAL_RESTRICTED",
+          upgrade: true,
+        },
+        { status: 403 }
+      );
+    }
+
+    return null; // full access — proceed
+  } catch {
+    return null; // never block on unexpected errors
+  }
+}
