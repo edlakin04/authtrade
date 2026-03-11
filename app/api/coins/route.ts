@@ -48,7 +48,7 @@ export async function GET(req: Request) {
     const sort = (url.searchParams.get("sort") || "trending").toLowerCase(); // trending | newest
     const q = (url.searchParams.get("q") || "").trim();
 
-    const { wallet: viewerWallet } = await getViewerWalletAndRole();
+    const { wallet: viewerWallet, role: viewerRole } = await getViewerWalletAndRole();
     const sb = supabaseAdmin();
 
     // Pull base coin rows from your existing view
@@ -94,7 +94,7 @@ export async function GET(req: Request) {
         ...c,
         viewer_has_upvoted: viewerWallet ? votedSet.has(c.id) : false
       }));
-      return NextResponse.json({ ok: true, viewerWallet, coins: out });
+      return NextResponse.json({ ok: true, viewerWallet, viewerRole, coins: out });
     }
 
     // --- TRENDING: compute recency-weighted score from recent votes/comments ---
@@ -125,7 +125,7 @@ export async function GET(req: Request) {
         }))
         .sort((a: any, b: any) => (b.trending_score || 0) - (a.trending_score || 0));
 
-      return NextResponse.json({ ok: true, viewerWallet, coins: fallback });
+      return NextResponse.json({ ok: true, viewerWallet, viewerRole, coins: fallback });
     }
 
     // Pull recent comments count per coin (12h)
@@ -196,7 +196,7 @@ export async function GET(req: Request) {
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
       });
 
-    return NextResponse.json({ ok: true, viewerWallet, coins: out });
+    return NextResponse.json({ ok: true, viewerWallet, viewerRole, coins: out });
   } catch (e: any) {
     return NextResponse.json(
       { error: "Failed to load coins", details: e?.message ?? String(e) },
