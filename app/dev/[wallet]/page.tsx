@@ -583,8 +583,18 @@ export default function DevPublicPage({ params }: { params: Promise<{ wallet: st
                               </div>
 
                               <div className="min-w-0">
-                                <div className="truncate text-sm font-semibold">{name}</div>
-                                <div className="font-mono text-[11px] text-zinc-500">{shortWallet(r.reviewer_wallet)}</div>
+                                <a
+                                  href={`/user/${encodeURIComponent(r.reviewer_wallet)}`}
+                                  className="truncate text-sm font-semibold hover:underline block"
+                                >
+                                  {name}
+                                </a>
+                                <a
+                                  href={`/user/${encodeURIComponent(r.reviewer_wallet)}`}
+                                  className="font-mono text-[11px] text-zinc-500 hover:text-zinc-300"
+                                >
+                                  {shortWallet(r.reviewer_wallet)}
+                                </a>
                               </div>
                             </div>
 
