@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { requireFullAccess } from "@/lib/subscription";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 
@@ -25,6 +26,9 @@ export async function POST(
     if (!viewerWallet) {
       return NextResponse.json({ error: "Not signed in" }, { status: 401 });
     }
+
+    const trialBlock = await requireFullAccess();
+    if (trialBlock) return trialBlock;
 
     const body = await req.json().catch(() => null);
     const option_id =
