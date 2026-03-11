@@ -12,10 +12,12 @@ type SubscribeReason = "new" | "expired";
 
 export default function GetStartedModal({
   open,
-  onClose
+  onClose,
+  intent = null,
 }: {
   open: boolean;
   onClose: () => void;
+  intent?: "subscribe" | "trial" | "upgrade" | null;
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -23,12 +25,20 @@ export default function GetStartedModal({
   const { connection } = useConnection();
   const { publicKey, signMessage, sendTransaction } = useWallet();
 
-  const [loading, setLoading] = useState<null | "signin" | "pay">(null);
+  const [loading, setLoading] = useState<null | "signin" | "pay" | "trial">(null);
   const [step, setStep] = useState<Step>("connect");
 
   // ✅ new vs expired messaging
   const [subscribeReason, setSubscribeReason] = useState<SubscribeReason>("new");
   const [expiredAt, setExpiredAt] = useState<string | null>(null);
+
+  // Trial state (read from server after sign-in)
+  const [trialStatus, setTrialStatus] = useState<{
+    trialEligible: boolean;
+    trialActive: boolean;
+    trialExpired: boolean;
+    daysRemaining: number;
+  } | null>(null);
 
   const shouldPromptSubscribe = useMemo(() => params.get("subscribe") === "1", [params]);
 
@@ -90,31 +100,19 @@ export default function GetStartedModal({
         return;
       }
 
-      // ✅ Not subscribed: decide "new" vs "expired" by checking subscription history
-      // This avoids editing your context route + avoids hard-coded column names.
-      const statusRes = await fetch(
-        `/api/subscription/status?wallet=${encodeURIComponent(publicKey.toBase58())}`,
-        { cache: "no-store" }
-      );
+      // Check subscription history + trial status in parallel
+      const [statusRes, trialRes] = await Promise.all([
+        fetch(`/api/subscription/status?wallet=${encodeURIComponent(publicKey.toBase58())}`, { cache: "no-store" }),
+        fetch("/api/auth/trial", { cache: "no-store" }),
+      ]);
 
       if (statusRes.ok) {
         const status = (await statusRes.json().catch(() => null)) as
-          | {
-              ok: true;
-              subscribedActive: boolean;
-              expiresAt: string | null;
-              hasEverSubscribed: boolean;
-            }
+          | { ok: true; subscribedActive: boolean; expiresAt: string | null; hasEverSubscribed: boolean }
           | null;
-
-        if (status?.ok) {
-          if (!status.subscribedActive && status.hasEverSubscribed && status.expiresAt) {
-            setSubscribeReason("expired");
-            setExpiredAt(status.expiresAt);
-          } else {
-            setSubscribeReason("new");
-            setExpiredAt(null);
-          }
+        if (status?.ok && !status.subscribedActive && status.hasEverSubscribed && status.expiresAt) {
+          setSubscribeReason("expired");
+          setExpiredAt(status.expiresAt);
         } else {
           setSubscribeReason("new");
           setExpiredAt(null);
@@ -124,10 +122,54 @@ export default function GetStartedModal({
         setExpiredAt(null);
       }
 
+      if (trialRes.ok) {
+        const t = await trialRes.json().catch(() => null);
+        if (t?.signedIn) {
+          setTrialStatus({
+            trialEligible: t.trialEligible,
+            trialActive:   t.trialActive,
+            trialExpired:  t.trialExpired,
+            daysRemaining: t.daysRemaining,
+          });
+        }
+      }
+
       setStep("subscribe");
     } catch (e) {
       console.error("Sign-in error:", e);
       alert("Sign-in failed. Try again.");
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleStartTrial() {
+    if (!publicKey) return alert("Connect a wallet first.");
+    setLoading("trial");
+    try {
+      const res = await fetch("/api/auth/trial", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const json = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        if (json?.code === "TRIAL_ALREADY_USED") {
+          alert("You've already used your free trial. Please subscribe to continue.");
+        } else if (json?.code === "ALREADY_SUBSCRIBED") {
+          router.push("/dashboard");
+        } else {
+          alert(json?.error ?? "Failed to start trial. Try again.");
+        }
+        return;
+      }
+
+      // Trial activated — refresh context then go to coins (trial landing)
+      await fetch("/api/context/refresh", { method: "POST" });
+      onClose();
+      router.push("/coins");
+    } catch (e: any) {
+      alert(e?.message ?? "Failed to start trial.");
     } finally {
       setLoading(null);
     }
@@ -199,15 +241,16 @@ export default function GetStartedModal({
   const connected = !!publicKey;
 
   const subscribeTitle =
-    subscribeReason === "expired" ? "Subscription expired" : "Start subscription";
+    intent === "upgrade"       ? "Upgrade to full access" :
+    subscribeReason === "expired" ? "Subscription expired"  : "Get started";
 
   const subscribeDesc =
-    subscribeReason === "expired"
-      ? "Your 30 days are up. Renew now to regain access."
-      : "Pay the monthly fee in SOL to unlock Authswap.";
+    intent === "upgrade"          ? "Subscribe to unlock all features." :
+    subscribeReason === "expired" ? "Your 30 days are up. Renew now to regain access." :
+                                    "Choose how you'd like to access Authswap.";
 
   const subscribeBtn =
-    subscribeReason === "expired" ? "Renew subscription" : "Start subscription";
+    subscribeReason === "expired" ? "Renew subscription" : "Subscribe now";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
