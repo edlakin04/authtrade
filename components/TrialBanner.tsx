@@ -51,7 +51,7 @@ export default function TrialBanner({ isTrial, daysRemaining }: Props) {
       .catch(() => null);
   }, [isTrial, daysRemaining]);
 
-  if (!ctx?.isTrial) return null;
+  if (!ctx?.isTrial || ctx.daysRemaining <= 0) return null;
 
   const days = ctx.daysRemaining;
   const urgency = days <= 1 ? "red" : days <= 3 ? "amber" : "blue";
@@ -77,11 +77,9 @@ export default function TrialBanner({ isTrial, daysRemaining }: Props) {
           </span>
           <div className="min-w-0">
             <div className="text-sm font-semibold">
-              {days <= 0
-                ? "Your free trial has expired"
-                : days === 1
+              {days === 1
                 ? "Last day of your free trial"
-                : `${days} day${days === 1 ? "" : "s"} left on your free trial`}
+                : `${days} days left on your free trial`}
             </div>
             <div className="mt-0.5 text-xs opacity-80">
               You can browse everything on Authswap. Subscribe to comment, upvote, follow devs, join communities, and trade.
