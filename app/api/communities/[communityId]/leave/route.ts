@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { requireFullAccess } from "@/lib/subscription";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 
@@ -19,6 +20,9 @@ export async function POST(_req: Request, ctx: { params: Promise<{ communityId: 
     const { communityId } = await ctx.params; // ✅ Next 15: params is a Promise
     const viewerWallet = await getViewerWallet();
     if (!viewerWallet) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const trialBlock = await requireFullAccess();
+  if (trialBlock) return trialBlock;
 
     const sb = supabaseAdmin();
 
