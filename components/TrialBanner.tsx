@@ -70,6 +70,7 @@ export default function TrialBanner({ isTrial, daysRemaining }: Props) {
   }[urgency];
 
   return (
+    <>
     <div className={`mb-6 rounded-2xl border px-4 py-3 ${colours}`}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5 min-w-0">
@@ -97,7 +98,8 @@ export default function TrialBanner({ isTrial, daysRemaining }: Props) {
       </div>
     </div>
 
-    <UpgradeModal open={upgradeOpen} onClose={() => setUpgradeOpen(false)} />
+      <UpgradeModal open={upgradeOpen} onClose={() => setUpgradeOpen(false)} />
+    </>
   );
 }
 
