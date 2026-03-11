@@ -30,6 +30,9 @@ type Holding = {
 type WalletPayload = {
   ok: true;
   owner: string;
+  sol: number;
+  solUsdPrice: number | null;
+  solUsdValue: number | null;
   totalUsd: number | null;
   holdings: Holding[];
 };
@@ -145,6 +148,9 @@ export default function UserWalletPage({
   const shortAddr = useMemo(() => shortWallet(wallet), [wallet]);
   const holdings = data?.holdings ?? [];
   const totalUsd = data?.totalUsd ?? null;
+  const sol = data?.sol ?? null;
+  const solUsdValue = data?.solUsdValue ?? null;
+  const solUsdPrice = data?.solUsdPrice ?? null;
 
   return (
     <main className="min-h-screen bg-authswap text-white">
@@ -208,6 +214,51 @@ export default function UserWalletPage({
         )}
 
         {/* ── Holdings list ───────────────────────────────────────────── */}
+        {/* ── SOL balance row ────────────────────────────────────────────── */}
+        {!loading && !err && sol !== null && sol > 0 && (
+          <div className="mb-1 flex items-center gap-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+            {/* SOL logo */}
+            <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-black/30 flex items-center justify-center">
+              <img
+                src="https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png"
+                alt="SOL"
+                className="h-8 w-8 object-contain"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+              />
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold text-white">Solana</span>
+                <span className="rounded-full border border-white/10 bg-black/30 px-2 py-0.5 text-[11px] text-zinc-400">
+                  SOL
+                </span>
+                <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-zinc-500">
+                  Native
+                </span>
+              </div>
+              {solUsdPrice !== null && (
+                <div className="mt-0.5 text-[11px] text-zinc-600">
+                  @ {fmt(solUsdPrice)} per SOL
+                </div>
+              )}
+            </div>
+
+            <div className="shrink-0 text-right">
+              {solUsdValue !== null ? (
+                <>
+                  <div className="text-base font-semibold text-white">{fmt(solUsdValue)}</div>
+                  <div className="text-xs text-zinc-500">{sol.toLocaleString(undefined, { maximumFractionDigits: 4 })} SOL</div>
+                </>
+              ) : (
+                <div className="text-base font-semibold text-zinc-300">
+                  {sol.toLocaleString(undefined, { maximumFractionDigits: 4 })} SOL
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {!loading && !err && holdings.length > 0 && (
           <div className="space-y-3">
             {holdings.map((h) => {
