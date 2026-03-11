@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import bs58 from "bs58";
@@ -41,6 +41,67 @@ export default function GetStartedModal({
   } | null>(null);
 
   const shouldPromptSubscribe = useMemo(() => params.get("subscribe") === "1", [params]);
+
+  // When modal opens, silently check if already signed in.
+  // If so, skip wallet connect + sign-in steps entirely.
+  useEffect(() => {
+    if (!open) return;
+
+    (async () => {
+      try {
+        const ctxRes = await fetch("/api/context/refresh", { method: "POST" });
+        if (!ctxRes.ok) return; // not signed in — stay on connect step
+
+        const ctx = await ctxRes.json().catch(() => null);
+        if (!ctx?.ok) return;
+
+        // Already signed in — go to dashboard if full access
+        if (ctx.role === "dev" || ctx.role === "admin" || ctx.subscribedActive) {
+          onClose();
+          router.push("/dashboard");
+          return;
+        }
+
+        // Active trial — already have access, go to coins
+        if (ctx.isTrial) {
+          onClose();
+          router.push("/coins");
+          return;
+        }
+
+        // Signed in but no sub/trial — jump straight to subscribe step
+        const [statusRes, trialRes] = await Promise.all([
+          fetch(`/api/subscription/status?wallet=${encodeURIComponent(ctx.wallet ?? "")}`, { cache: "no-store" }),
+          fetch("/api/auth/trial", { cache: "no-store" }),
+        ]);
+
+        if (statusRes.ok) {
+          const status = await statusRes.json().catch(() => null);
+          if (status?.ok && !status.subscribedActive && status.hasEverSubscribed && status.expiresAt) {
+            setSubscribeReason("expired");
+            setExpiredAt(status.expiresAt);
+          }
+        }
+
+        if (trialRes.ok) {
+          const t = await trialRes.json().catch(() => null);
+          if (t?.signedIn) {
+            setTrialStatus({
+              trialEligible: t.trialEligible,
+              trialActive:   t.trialActive,
+              trialExpired:  t.trialExpired,
+              daysRemaining: t.daysRemaining,
+            });
+          }
+        }
+
+        setStep("subscribe");
+      } catch {
+        // silent — stay on connect step
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   if (!open) return null;
 
@@ -100,11 +161,11 @@ export default function GetStartedModal({
         return;
       }
 
-      // If trial is currently active → they're already on a trial, send them to /coins
-      // (they hit this path when a blocked action redirected them here)
+      // If trial is currently active → close modal, they're already signed in with trial access
+      // The middleware will handle routing — just close and let them stay where they are
       if (ctx?.ok && ctx.isTrial) {
         onClose();
-        window.location.href = "/coins";
+        router.push("/coins");
         return;
       }
 
