@@ -3,7 +3,7 @@
 import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import TopNav from "@/components/TopNav";
-import GetStartedModal from "@/components/GetStartedModal";
+import UpgradeModal from "@/components/UpgradeModal";
 import TrialBanner from "@/components/TrialBanner";
 
 type CoinRow = {
@@ -446,10 +446,9 @@ function CoinsPageInner() {
 
       {/* Trial action blocked toast */}
       {/* Trial upgrade modal */}
-      <GetStartedModal
+      <UpgradeModal
         open={trialToast}
         onClose={() => setTrialToast(false)}
-        intent="upgrade"
       />
     </main>
   );
