@@ -491,7 +491,13 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
 
             <div className="min-w-0">
               <div className="flex min-w-0 items-center gap-2">
-                <div className="truncate text-sm font-semibold">{name}</div>
+                <a
+                  href={m.is_dev ? `/dev/${encodeURIComponent(m.author_wallet)}` : `/user/${encodeURIComponent(m.author_wallet)}`}
+                  className="truncate text-sm font-semibold hover:underline"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {name}
+                </a>
                 {m.is_dev ? (
                   <span className="shrink-0 rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-zinc-200">
                     DEV
@@ -503,7 +509,13 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
                   </span>
                 ) : null}
               </div>
-              <div className="font-mono text-[11px] text-zinc-500">{shortAddr(m.author_wallet)}</div>
+              <a
+                href={m.is_dev ? `/dev/${encodeURIComponent(m.author_wallet)}` : `/user/${encodeURIComponent(m.author_wallet)}`}
+                className="font-mono text-[11px] text-zinc-500 hover:text-zinc-300"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {shortAddr(m.author_wallet)}
+              </a>
             </div>
           </div>
 
