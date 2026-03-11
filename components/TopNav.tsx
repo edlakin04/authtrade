@@ -9,6 +9,13 @@ type Ctx = {
   role: "user" | "dev" | "admin";
   subscribedActive: boolean;
   paidUntilMs: number;
+  // Trial fields
+  isTrial: boolean;
+  trialActive: boolean;
+  trialExpired: boolean;
+  trialEligible: boolean;
+  daysRemaining: number;
+  trialExpiresAtMs: number | null;
 };
 
 function Tab({
@@ -198,9 +205,18 @@ export default function TopNav() {
 
         <div className="flex items-center gap-2">
           {ctx ? (
-            <div className="hidden rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300 md:block">
-              {ctx.role.toUpperCase()} • {ctx.subscribedActive ? "SUB ACTIVE" : "NO SUB"}
-            </div>
+            ctx.isTrial ? (
+              <a
+                href="/?subscribe=1&trial_upgrade=1"
+                className="hidden rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-500/20 transition md:block"
+              >
+                🕐 Trial — {ctx.daysRemaining}d left · Upgrade
+              </a>
+            ) : (
+              <div className="hidden rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300 md:block">
+                {ctx.role.toUpperCase()} • {ctx.subscribedActive ? "SUB ACTIVE" : "NO SUB"}
+              </div>
+            )
           ) : (
             <div className="hidden rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-400 md:block">
               Loading…
