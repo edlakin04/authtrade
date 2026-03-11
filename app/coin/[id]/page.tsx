@@ -279,7 +279,10 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
     });
 
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) return alert(json?.error ?? "Comment failed");
+    if (!res.ok) {
+      if (json?.code === "TRIAL_RESTRICTED") { window.location.href = "/?subscribe=1&trial_upgrade=1"; return; }
+      return alert(json?.error ?? "Comment failed");
+    }
 
     setCommentText("");
     await loadComments(coin.id);
@@ -299,7 +302,10 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
 
       const res = await fetch(endpoint, { method });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok) return alert(json?.error ?? "Vote failed");
+      if (!res.ok) {
+        if (json?.code === "TRIAL_RESTRICTED") { window.location.href = "/?subscribe=1&trial_upgrade=1"; return; }
+        return alert(json?.error ?? "Vote failed");
+      }
 
       const nowUpvoted = !coin.viewer_has_upvoted;
       setCoin((prev) =>
