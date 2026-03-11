@@ -309,7 +309,13 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
     try {
       const res = await fetch(`/api/communities/${encodeURIComponent(communityId)}/join`, { method: "POST" });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json?.error || "Join failed");
+      if (!res.ok) {
+        if (json?.code === "TRIAL_RESTRICTED") {
+          window.location.href = "/?subscribe=1&trial_upgrade=1";
+          return;
+        }
+        throw new Error(json?.error || "Join failed");
+      }
       await loadInitial();
     } catch (e: any) {
       alert(e?.message ?? "Join failed");
@@ -388,7 +394,10 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
         body: JSON.stringify({ text: t || null, image_path: imagePath })
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json?.error || "Send failed");
+      if (!res.ok) {
+        if (json?.code === "TRIAL_RESTRICTED") { window.location.href = "/?subscribe=1&trial_upgrade=1"; return; }
+        throw new Error(json?.error || "Send failed");
+      }
 
       setText("");
       clearImage();
