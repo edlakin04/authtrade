@@ -53,26 +53,26 @@ export default function HomeClient() {
 
         {/* ── CTAs ──────────────────────────────────────────────────────────── */}
         <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-start">
-          {/* Primary — subscribe now */}
+          {/* Primary — subscribe / trial (opens modal showing both options) */}
           <button
             onClick={() => { setModalIntent("subscribe"); setOpenGetStarted(true); }}
             className="rounded-2xl bg-white px-6 py-3 text-sm font-semibold text-black hover:bg-zinc-200 transition"
           >
-            Subscribe now
+            Get started — Subscribe or free trial
           </button>
 
-          {/* Secondary — free trial */}
+          {/* Secondary — sign in for returning users */}
           <button
-            onClick={() => { setModalIntent("trial"); setOpenGetStarted(true); }}
+            onClick={() => { setModalIntent("subscribe"); setOpenGetStarted(true); }}
             className="rounded-2xl border border-white/20 bg-white/5 px-6 py-3 text-sm font-semibold text-white hover:bg-white/10 transition"
           >
-            Start 7-day free trial
+            Sign in
           </button>
         </div>
 
-        {/* Trial disclaimer */}
+        {/* Disclaimer */}
         <p className="mt-3 text-xs text-zinc-500">
-          Free trial lets you browse coins and dev profiles only. One trial per wallet. No card required.
+          Already have a subscription or free trial? Click Sign in above.
         </p>
 
         {/* ── Feature cards ──────────────────────────────────────────────────── */}
