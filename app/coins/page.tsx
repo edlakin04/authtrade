@@ -418,7 +418,7 @@ export default function CoinsPage() {
                   {comments.map((cm) => (
                     <div key={cm.id} className="rounded-xl border border-white/10 bg-black/30 p-3">
                       <div className="flex items-center justify-between gap-3 text-xs text-zinc-500">
-                        <span className="font-mono">{shortAddr(cm.author_wallet)}</span>
+                        <a href={`/user/${encodeURIComponent(cm.author_wallet)}`} className="font-mono hover:text-zinc-300 transition">{shortAddr(cm.author_wallet)}</a>
                         <span>{new Date(cm.created_at).toLocaleString()}</span>
                       </div>
 
