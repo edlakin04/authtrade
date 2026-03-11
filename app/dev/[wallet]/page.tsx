@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import TopNav from "@/components/TopNav";
 import Link from "next/link";
+import TrialBanner from "@/components/TrialBanner";
 
 type PollOption = {
   id: string;
