@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import TopNav from "@/components/TopNav";
-import GetStartedModal from "@/components/GetStartedModal";
+import UpgradeModal from "@/components/UpgradeModal";
 import LiveStreamBroadcaster from "@/components/LiveStreamBroadcaster";
 import LiveStreamViewer from "@/components/LiveStreamViewer";
 
@@ -440,7 +440,10 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
         body: JSON.stringify({ option_id: optionId })
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json?.error || "Vote failed");
+      if (!res.ok) {
+        if (json?.code === "TRIAL_RESTRICTED") { setTrialToast(true); return; }
+        throw new Error(json?.error || "Vote failed");
+      }
 
       // refresh to update counts + viewer_vote
       await loadInitial({ scrollToBottom: false });
@@ -929,10 +932,9 @@ export default function CommunityPage({ params }: { params: Promise<{ id: string
       </div>
 
       {/* Trial upgrade modal */}
-      <GetStartedModal
+      <UpgradeModal
         open={trialToast}
         onClose={() => setTrialToast(false)}
-        intent="upgrade"
       />
     </main>
   );
