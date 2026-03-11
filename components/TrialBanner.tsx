@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import Link from "next/link";
+import UpgradeModal from "@/components/UpgradeModal";
 
 type TrialCtx = {
   isTrial: boolean;
@@ -22,6 +22,7 @@ type Props = {
 
 export default function TrialBanner({ isTrial, daysRemaining }: Props) {
   const [ctx, setCtx] = useState<TrialCtx | null>(null);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
 
   useEffect(() => {
     // If props are passed directly, use them
@@ -87,14 +88,16 @@ export default function TrialBanner({ isTrial, daysRemaining }: Props) {
           </div>
         </div>
 
-        <Link
-          href="/?subscribe=1&trial_upgrade=1"
+        <button
+          onClick={() => setUpgradeOpen(true)}
           className={`shrink-0 rounded-xl px-4 py-2 text-xs font-semibold transition ${btnColours}`}
         >
           Subscribe now →
-        </Link>
+        </button>
       </div>
     </div>
+
+    <UpgradeModal open={upgradeOpen} onClose={() => setUpgradeOpen(false)} />
   );
 }
 
