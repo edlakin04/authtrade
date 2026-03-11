@@ -4,7 +4,16 @@ import { SESSION_COOKIE_NAME } from "@/lib/auth";
 import { SUB_COOKIE_NAME, readSubToken } from "@/lib/subscription";
 import { ROLE_COOKIE_NAME, readRoleToken } from "@/lib/role";
 
-const PROTECTED_PREFIXES = ["/dashboard", "/coins", "/account", "/subscription", "/dev"];
+// ─── Route classification ─────────────────────────────────────────────────────
+
+// All routes that require at least a session (signed in)
+const PROTECTED_PREFIXES = ["/dashboard", "/coins", "/account", "/subscription", "/dev", "/community", "/trade", "/coin"];
+
+// Routes trial users CAN access (read-only browsing)
+const TRIAL_ALLOWED_PREFIXES = ["/coins", "/coin", "/dev"];
+
+// Routes that require full paid access (trial users blocked → redirect to subscribe)
+const FULL_ACCESS_PREFIXES = ["/dashboard", "/account", "/subscription", "/community", "/trade"];
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -12,7 +21,7 @@ export async function middleware(req: NextRequest) {
   const isProtected = PROTECTED_PREFIXES.some((p) => pathname.startsWith(p));
   if (!isProtected) return NextResponse.next();
 
-  // must be signed in
+  // ── 1. Must be signed in ───────────────────────────────────────────────────
   const session = req.cookies.get(SESSION_COOKIE_NAME)?.value;
   if (!session) {
     const url = req.nextUrl.clone();
@@ -20,7 +29,7 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // If dev/admin => allow (no subscription needed)
+  // ── 2. Devs and admins bypass everything ───────────────────────────────────
   const roleToken = req.cookies.get(ROLE_COOKIE_NAME)?.value;
   if (roleToken) {
     const decodedRole = await readRoleToken(roleToken).catch(() => null);
@@ -29,26 +38,60 @@ export async function middleware(req: NextRequest) {
     }
   }
 
-  // Otherwise require subscription
+  // ── 3. Read sub/trial cookie ───────────────────────────────────────────────
   const subToken = req.cookies.get(SUB_COOKIE_NAME)?.value;
+
+  // No cookie at all → redirect to subscribe
   if (!subToken) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/";
-    url.searchParams.set("subscribe", "1");
-    return NextResponse.redirect(url);
+    return redirectToSubscribe(req, "subscribe");
   }
 
   const decodedSub = await readSubToken(subToken).catch(() => null);
+
+  // Invalid or expired cookie → redirect to subscribe
   if (!decodedSub || decodedSub.paidUntilMs <= Date.now()) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/";
-    url.searchParams.set("subscribe", "1");
-    return NextResponse.redirect(url);
+    return redirectToSubscribe(req, "subscribe");
   }
 
+  // ── 4. Trial users: allow read-only paths, block everything else ───────────
+  if (decodedSub.isTrial) {
+    const isTrialAllowed = TRIAL_ALLOWED_PREFIXES.some((p) => pathname.startsWith(p));
+
+    if (!isTrialAllowed) {
+      // They're trying to access a full-access page on a trial
+      // Redirect to subscribe page with a flag so we show the right message
+      return redirectToSubscribe(req, "trial_upgrade");
+    }
+
+    // Trial allowed — let them through to the read-only page
+    return NextResponse.next();
+  }
+
+  // ── 5. Paid sub — full access ──────────────────────────────────────────────
   return NextResponse.next();
 }
 
+// ─── Helper ───────────────────────────────────────────────────────────────────
+
+function redirectToSubscribe(req: NextRequest, reason: "subscribe" | "trial_upgrade") {
+  const url = req.nextUrl.clone();
+  url.pathname = "/";
+  url.searchParams.set("subscribe", "1");
+  if (reason === "trial_upgrade") {
+    url.searchParams.set("trial_upgrade", "1");
+  }
+  return NextResponse.redirect(url);
+}
+
 export const config = {
-  matcher: ["/dashboard/:path*", "/coins/:path*", "/account/:path*", "/subscription/:path*", "/dev/:path*"]
+  matcher: [
+    "/dashboard/:path*",
+    "/coins/:path*",
+    "/coin/:path*",
+    "/account/:path*",
+    "/subscription/:path*",
+    "/dev/:path*",
+    "/community/:path*",
+    "/trade/:path*",
+  ]
 };
