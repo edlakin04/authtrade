@@ -42,74 +42,7 @@ export default function GetStartedModal({
 
   const shouldPromptSubscribe = useMemo(() => params.get("subscribe") === "1", [params]);
 
-  // When modal opens, silently check if already signed in.
-  // Uses GET /api/me (read-only, no cookie side-effects) to avoid
-  // accidentally redirecting users who have stale/expired cookies.
-  useEffect(() => {
-    if (!open) return;
 
-    (async () => {
-      try {
-        // Step 1: lightweight session check — does NOT set any cookies
-        const meRes = await fetch("/api/me", { cache: "no-store" });
-        if (!meRes.ok) return;
-        const me = await meRes.json().catch(() => null);
-        if (!me?.wallet) return; // no valid session — stay on connect step
-
-        // Step 2: now that we know they're signed in, refresh context
-        const ctxRes = await fetch("/api/context/refresh", { method: "POST" });
-        if (!ctxRes.ok) return;
-
-        const ctx = await ctxRes.json().catch(() => null);
-        if (!ctx?.ok) return;
-
-        // Already signed in with full access — go to dashboard
-        if (ctx.role === "dev" || ctx.role === "admin" || ctx.subscribedActive) {
-          onClose();
-          router.push("/dashboard");
-          return;
-        }
-
-        // Active trial — go to dashboard (trial users can see everything now)
-        if (ctx.isTrial) {
-          onClose();
-          router.push("/dashboard");
-          return;
-        }
-
-        // Signed in but no sub/trial — jump straight to subscribe step
-        const [statusRes, trialRes] = await Promise.all([
-          fetch(`/api/subscription/status?wallet=${encodeURIComponent(ctx.wallet ?? "")}`, { cache: "no-store" }),
-          fetch("/api/auth/trial", { cache: "no-store" }),
-        ]);
-
-        if (statusRes.ok) {
-          const status = await statusRes.json().catch(() => null);
-          if (status?.ok && !status.subscribedActive && status.hasEverSubscribed && status.expiresAt) {
-            setSubscribeReason("expired");
-            setExpiredAt(status.expiresAt);
-          }
-        }
-
-        if (trialRes.ok) {
-          const t = await trialRes.json().catch(() => null);
-          if (t?.signedIn) {
-            setTrialStatus({
-              trialEligible: t.trialEligible,
-              trialActive:   t.trialActive,
-              trialExpired:  t.trialExpired,
-              daysRemaining: t.daysRemaining,
-            });
-          }
-        }
-
-        setStep("subscribe");
-      } catch {
-        // silent — stay on connect step
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
 
   if (!open) return null;
 
