@@ -4,6 +4,9 @@ import { cookies } from "next/headers";
 import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
+const REF_COOKIE_NAME = "authswap_ref";
+const DEV_AFFILIATE_CUT_SOL = 1.0;  // affiliate earns 1 SOL per dev subscription payment
+
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => null);
@@ -12,6 +15,7 @@ export async function POST(req: Request) {
 
     const cookieStore = await cookies();
     const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+    const refCookieValue = cookieStore.get(REF_COOKIE_NAME)?.value ?? null;
     if (!sessionToken) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
     const sessionData = await readSessionToken(sessionToken).catch(() => null);
@@ -66,16 +70,60 @@ export async function POST(req: Request) {
 
     await sb.from("users").upsert({ wallet: sessionData.wallet });
 
-    // Dedupe payment
+    // ── Resolve affiliate referrer ────────────────────────────────────────
+    let validReferrer: string | null = null;
+
+    if (refCookieValue && refCookieValue !== sessionData.wallet) {
+      const { data: devCheck } = await sb
+        .from("dev_profiles")
+        .select("wallet")
+        .eq("wallet", refCookieValue)
+        .maybeSingle();
+
+      if (devCheck?.wallet) {
+        validReferrer = refCookieValue;
+      } else {
+        const { data: userCheck } = await sb
+          .from("users")
+          .select("role")
+          .eq("wallet", refCookieValue)
+          .maybeSingle();
+        if (userCheck?.role === "dev" || userCheck?.role === "admin") {
+          validReferrer = refCookieValue;
+        }
+      }
+    }
+
+    // ── Dedupe payment ────────────────────────────────────────────────────
     const { data: existing } = await sb.from("payments").select("signature").eq("signature", signature).maybeSingle();
     if (!existing?.signature) {
       const { error: payErr } = await sb.from("payments").insert({
         signature,
-        wallet: sessionData.wallet,
-        kind: "dev_fee",
-        amount_sol: deltaSol
+        wallet:          sessionData.wallet,
+        kind:            "dev_fee",
+        amount_sol:      deltaSol,
+        referrer_wallet: validReferrer,
       });
       if (payErr) return NextResponse.json({ error: payErr.message }, { status: 500 });
+
+      // ── Record affiliate earning ───────────────────────────────────────
+      if (validReferrer) {
+        await sb.from("affiliate_earnings").insert({
+          referrer_wallet:   validReferrer,
+          referee_wallet:    sessionData.wallet,
+          payment_signature: signature,
+          amount_sol:        DEV_AFFILIATE_CUT_SOL,
+          kind:              "dev_sub",
+          paid_out:          false,
+        }).catch(() => null);
+
+        await sb.from("referrals").upsert({
+          referrer_wallet: validReferrer,
+          referee_wallet:  sessionData.wallet,
+          status:          "converted",
+          converted_at:    new Date().toISOString(),
+        }, { onConflict: "referee_wallet" }).catch(() => null);
+      }
     }
 
     // Promote to dev
