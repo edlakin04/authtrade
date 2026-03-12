@@ -51,7 +51,8 @@ function shortAddr(w: string) {
 }
 
 function fmtSol(n: number) {
-  return `\u25ce${n % 1 === 0 ? n.toFixed(1) : n.toFixed(4)}`;
+  const formatted = n % 1 === 0 ? n.toString() : n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  return `${formatted} SOL`;
 }
 
 function fmtUsd(n: number | null) {
@@ -169,12 +170,12 @@ export default function AffiliatePage() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="rounded-xl border border-white/5 bg-black/20 p-3">
                   <p className="text-xs text-zinc-500">User subscription</p>
-                  <p className="mt-1 text-lg font-bold text-white">\u25ce0.2</p>
+                  <p className="mt-1 text-lg font-bold text-white">0.2 SOL</p>
                   <p className="text-xs text-zinc-600">per monthly payment</p>
                 </div>
                 <div className="rounded-xl border border-white/5 bg-black/20 p-3">
                   <p className="text-xs text-zinc-500">Dev subscription</p>
-                  <p className="mt-1 text-lg font-bold text-white">\u25ce1.0</p>
+                  <p className="mt-1 text-lg font-bold text-white">1 SOL</p>
                   <p className="text-xs text-zinc-600">per monthly payment</p>
                 </div>
               </div>
