@@ -250,6 +250,11 @@ export default function TopNav() {
                 )}
               </Link>
             )}
+
+            {/* Affiliate tab — dev only */}
+            {isDev && (
+              <Tab href="/affiliate" label="Affiliate" active={pathname.startsWith("/affiliate")} />
+            )}
           </div>
         </div>
 
@@ -329,6 +334,11 @@ export default function TopNav() {
                 <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-red-500 ring-2 ring-zinc-950" />
               )}
             </Link>
+          )}
+
+          {/* Affiliate tab — dev only */}
+          {isDev && (
+            <Tab href="/affiliate" label="Affiliate" active={pathname.startsWith("/affiliate")} />
           )}
         </div>
       </div>
