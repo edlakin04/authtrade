@@ -83,6 +83,3 @@ export async function GET(req: Request) {
     );
   }
 }
-
-// ─── Export cookie name so other routes can import it ─────────────────────────
-export { REF_COOKIE_NAME };
