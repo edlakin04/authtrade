@@ -21,6 +21,7 @@ export default function HomeClient() {
     const subscribe     = searchParams.get("subscribe")     === "1";
     const getstarted    = searchParams.get("getstarted")    === "1";
     const trialUpgrade  = searchParams.get("trial_upgrade") === "1";
+    const ref           = searchParams.get("ref")           ?? "";
 
     if (trialUpgrade) {
       setModalIntent("upgrade");
@@ -28,6 +29,16 @@ export default function HomeClient() {
     } else if (subscribe || getstarted) {
       setModalIntent("subscribe");
       setOpenGetStarted(true);
+    }
+
+    // ── Referral tracking ────────────────────────────────────────────────────
+    // If ?ref=WALLET is in the URL, silently call the track endpoint.
+    // This validates the referrer is a real dev and sets an HttpOnly cookie.
+    // We fire-and-forget — a failure here should never break the landing page.
+    if (ref) {
+      fetch(`/api/referral/track?ref=${encodeURIComponent(ref)}`, {
+        cache: "no-store",
+      }).catch(() => null);
     }
   }, [searchParams]);
 
