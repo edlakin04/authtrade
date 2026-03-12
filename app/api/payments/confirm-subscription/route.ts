@@ -121,22 +121,22 @@ export async function POST(req: Request) {
       // ── Record affiliate earning ───────────────────────────────────────
       if (validReferrer) {
         // unique constraint on payment_signature prevents doubles
-        await sb.from("affiliate_earnings").insert({
+        await Promise.resolve(sb.from("affiliate_earnings").insert({
           referrer_wallet:   validReferrer,
           referee_wallet:    sessionData.wallet,
           payment_signature: signature,
           amount_sol:        USER_AFFILIATE_CUT_SOL,
           kind:              "user_sub",
           paid_out:          false,
-        }).catch(() => null); // never kill the payment flow
+        })).catch(() => null); // never kill the payment flow
 
         // Mark referral as converted
-        await sb.from("referrals").upsert({
+        await Promise.resolve(sb.from("referrals").upsert({
           referrer_wallet: validReferrer,
           referee_wallet:  sessionData.wallet,
           status:          "converted",
           converted_at:    new Date().toISOString(),
-        }, { onConflict: "referee_wallet" }).catch(() => null);
+        }, { onConflict: "referee_wallet" })).catch(() => null);
       }
     }
 
