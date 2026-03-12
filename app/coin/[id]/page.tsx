@@ -164,12 +164,19 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
   const [chartData, setChartData] = useState<ChartPayload | null>(null);
   const [chartLoading, setChartLoading] = useState(false);
   const [chartResolution, setChartResolution] = useState<"5m" | "15m" | "1h" | "4h" | "1d">("15m");
-  const [bottomTab, setBottomTab] = useState<"chart" | "trades">("chart");
+  const [bottomTab, setBottomTab] = useState<"chart" | "trades" | "holders">("chart");
 
   // ── Trades state ─────────────────────────────────────────────────────────────
   const [tradesData, setTradesData] = useState<TradesPayload | null>(null);
   const [tradesLoading, setTradesLoading] = useState(false);
   const [newTradeKeys, setNewTradeKeys] = useState<Set<string>>(new Set());
+
+  // ── Holders state ─────────────────────────────────────────────────────────
+  type Holder = { address: string; owner: string; amount: number; pct: number };
+  type HoldersPayload = { ok: true; mint: string; totalSupply: number; holderCount: number; holders: Holder[]; decimals: number };
+  const [holdersData, setHoldersData] = useState<HoldersPayload | null>(null);
+  const [holdersLoading, setHoldersLoading] = useState(false);
+  const [holdersErr, setHoldersErr] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -474,6 +481,22 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
     }
   }
 
+  async function loadHolders(m: string) {
+    if (!m) return;
+    setHoldersLoading(true);
+    setHoldersErr(null);
+    try {
+      const r = await fetch(`/api/coin-holders?mint=${encodeURIComponent(m)}`, { cache: "no-store" });
+      const json = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(json?.error ?? "Failed to load holders");
+      setHoldersData(json as HoldersPayload);
+    } catch (e: any) {
+      setHoldersErr(e?.message ?? "Failed to load holders");
+    } finally {
+      setHoldersLoading(false);
+    }
+  }
+
   async function loadTrades(m: string) {
     if (!m) return;
     setTradesLoading(true);
@@ -576,6 +599,14 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mint, chartResolution]);
+
+  // Load holders when tab switches to "holders" (fetch once, no polling needed)
+  useEffect(() => {
+    if (bottomTab !== "holders" || !mint) return;
+    if (holdersData?.mint === mint) return; // already loaded for this mint
+    loadHolders(mint);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bottomTab, mint]);
 
   return (
     <main className="min-h-screen bg-authswap text-white">
@@ -786,7 +817,7 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
               {/* Tab bar */}
               <div className="flex items-center justify-between border-b border-white/10 px-4">
                 <div className="flex">
-                  {(["chart", "trades"] as const).map((tab) => (
+                  {(["chart", "trades", "holders"] as const).map((tab) => (
                     <button
                       key={tab}
                       onClick={() => setBottomTab(tab)}
@@ -797,7 +828,7 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
                           : "border-transparent text-zinc-500 hover:text-zinc-300"
                       ].join(" ")}
                     >
-                      {tab === "chart" ? "📈 Chart" : "🔄 Trades"}
+                      {tab === "chart" ? "📈 Chart" : tab === "trades" ? "🔄 Trades" : "👥 Holders"}
                     </button>
                   ))}
                 </div>
@@ -1015,6 +1046,121 @@ export default function CoinPage({ params }: { params: Promise<{ id: string }> }
                       </table>
                     ) : null}
                   </div>
+                </div>
+              )}
+
+              {/* ── HOLDERS TAB ─────────────────────────────────────────────── */}
+              {bottomTab === "holders" && (
+                <div className="p-4">
+                  {/* Summary row */}
+                  {holdersData && (
+                    <div className="mb-4 flex flex-wrap gap-4 text-xs text-zinc-400">
+                      <span>
+                        Total supply:{" "}
+                        <span className="text-zinc-200 font-semibold">
+                          {holdersData.totalSupply >= 1_000_000_000
+                            ? `${(holdersData.totalSupply / 1_000_000_000).toFixed(2)}B`
+                            : holdersData.totalSupply >= 1_000_000
+                            ? `${(holdersData.totalSupply / 1_000_000).toFixed(2)}M`
+                            : holdersData.totalSupply.toLocaleString()}
+                        </span>
+                      </span>
+                      {holdersData.holderCount > 0 && (
+                        <span>
+                          Total holders:{" "}
+                          <span className="text-zinc-200 font-semibold">
+                            {holdersData.holderCount.toLocaleString()}
+                          </span>
+                        </span>
+                      )}
+                      <span className="text-zinc-600">Showing top {holdersData.holders.length}</span>
+                    </div>
+                  )}
+
+                  {/* Loading */}
+                  {holdersLoading && (
+                    <div className="space-y-2">
+                      {[1,2,3,4,5,6,7,8].map(i => (
+                        <div key={i} className="animate-pulse h-10 rounded-xl bg-white/[0.03]" />
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Error */}
+                  {holdersErr && !holdersLoading && (
+                    <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-300">
+                      {holdersErr}
+                    </div>
+                  )}
+
+                  {/* Holder rows */}
+                  {!holdersLoading && !holdersErr && holdersData && (
+                    holdersData.holders.length === 0 ? (
+                      <div className="flex h-32 items-center justify-center text-sm text-zinc-500">
+                        No holders found.
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {holdersData.holders.map((h, i) => (
+                          <div
+                            key={h.address}
+                            className="flex items-center gap-3 rounded-xl border border-white/5 bg-black/20 px-3 py-2.5"
+                          >
+                            {/* Rank */}
+                            <span className="w-5 shrink-0 text-xs text-zinc-600 font-mono text-right">
+                              {i + 1}
+                            </span>
+
+                            {/* Wallet — link to /user/[wallet] */}
+                            <a
+                              href={`/user/${encodeURIComponent(h.owner)}`}
+                              className="min-w-0 flex-1 font-mono text-xs text-zinc-300 hover:text-white transition truncate"
+                              title={h.owner}
+                            >
+                              {h.owner.slice(0, 4)}…{h.owner.slice(-4)}
+                            </a>
+
+                            {/* Amount */}
+                            <span className="shrink-0 text-xs text-zinc-400 tabular-nums">
+                              {h.amount >= 1_000_000_000
+                                ? `${(h.amount / 1_000_000_000).toFixed(2)}B`
+                                : h.amount >= 1_000_000
+                                ? `${(h.amount / 1_000_000).toFixed(2)}M`
+                                : h.amount >= 1_000
+                                ? `${(h.amount / 1_000).toFixed(2)}K`
+                                : h.amount.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                            </span>
+
+                            {/* Percentage + bar */}
+                            <div className="flex w-24 shrink-0 items-center gap-2">
+                              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/10">
+                                <div
+                                  className="h-full rounded-full bg-emerald-500/70"
+                                  style={{ width: `${Math.min(h.pct, 100)}%` }}
+                                />
+                              </div>
+                              <span className={[
+                                "w-12 text-right text-xs font-semibold tabular-nums",
+                                h.pct >= 10 ? "text-amber-400" : "text-zinc-300"
+                              ].join(" ")}>
+                                {h.pct.toFixed(2)}%
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  )}
+
+                  {/* Refresh button */}
+                  {!holdersLoading && holdersData && (
+                    <button
+                      onClick={() => coin && loadHolders(coin.token_address)}
+                      className="mt-4 text-xs text-zinc-600 hover:text-zinc-400 transition"
+                    >
+                      ↻ Refresh
+                    </button>
+                  )}
                 </div>
               )}
             </div>
