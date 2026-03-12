@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/internal/golden-hour/pick",
+      "schedule": "55 19 * * *"
+    },
+    {
+      "path": "/api/internal/bidding-ad/settle",
+      "schedule": "5 20 * * *"
+    }
+  ]
+}
