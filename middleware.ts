@@ -7,7 +7,7 @@ import { ROLE_COOKIE_NAME, readRoleToken } from "@/lib/role";
 // ─── Route classification ─────────────────────────────────────────────────────
 
 // All routes that require at least a session (signed in)
-const PROTECTED_PREFIXES = ["/dashboard", "/coins", "/account", "/subscription", "/dev", "/community", "/trade", "/coin"];
+const PROTECTED_PREFIXES = ["/dashboard", "/coins", "/account", "/subscription", "/dev", "/community", "/trade", "/coin", "/affiliate"];
 
 // Trial users can access ALL protected routes — actions are blocked at the API level only
 // No TRIAL_ALLOWED_PREFIXES restriction needed
@@ -74,5 +74,6 @@ export const config = {
     "/dev/:path*",
     "/community/:path*",
     "/trade/:path*",
+    "/affiliate/:path*",
   ]
 };
