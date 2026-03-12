@@ -108,21 +108,21 @@ export async function POST(req: Request) {
 
       // ── Record affiliate earning ───────────────────────────────────────
       if (validReferrer) {
-        await sb.from("affiliate_earnings").insert({
+        await Promise.resolve(sb.from("affiliate_earnings").insert({
           referrer_wallet:   validReferrer,
           referee_wallet:    sessionData.wallet,
           payment_signature: signature,
           amount_sol:        DEV_AFFILIATE_CUT_SOL,
           kind:              "dev_sub",
           paid_out:          false,
-        }).catch(() => null);
+        })).catch(() => null);
 
-        await sb.from("referrals").upsert({
+        await Promise.resolve(sb.from("referrals").upsert({
           referrer_wallet: validReferrer,
           referee_wallet:  sessionData.wallet,
           status:          "converted",
           converted_at:    new Date().toISOString(),
-        }, { onConflict: "referee_wallet" }).catch(() => null);
+        }, { onConflict: "referee_wallet" })).catch(() => null);
       }
     }
 
