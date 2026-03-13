@@ -204,12 +204,12 @@ export async function POST(req: Request) {
               .eq("jurisdiction", jurisdiction);
 
             // Use RPC increment to avoid race conditions
-            await sb.rpc("increment_vat_cumulative", {
+            await Promise.resolve(sb.rpc("increment_vat_cumulative", {
               p_jurisdiction:  jurisdiction,
               p_revenue_gbp:   gbpForPayment,
               p_revenue_native: gbpForPayment, // approximate — exact native needs FX API
               p_payment_count: 1,
-            }).catch(() => null); // non-fatal
+            })).catch(() => null); // non-fatal
           }
         } catch (cumulErr: any) {
           console.warn("VAT cumulative update failed:", cumulErr?.message);
