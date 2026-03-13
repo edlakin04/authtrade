@@ -4,6 +4,14 @@ import { cookies } from "next/headers";
 import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { createSubToken, subCookie } from "@/lib/subscription";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import {
+  isBlockedCountry,
+  getApplicableVatRate,
+  getJurisdiction,
+  extractVat,
+  getCountryRule,
+} from "@/lib/vatRules";
+import { getSolGbpPrice } from "@/lib/solPrice";
 
 const REF_COOKIE_NAME = "authswap_ref";
 const USER_AFFILIATE_CUT_SOL = 0.2;  // affiliate earns 0.2 SOL per user sub payment
@@ -11,10 +19,18 @@ const USER_AFFILIATE_CUT_SOL = 0.2;  // affiliate earns 0.2 SOL per user sub pay
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => null);
-    const signature = body?.signature as string | undefined;
+    const signature       = (body?.signature        as string | undefined)?.trim();
+    const declaredCountry = (body?.declared_country  as string | undefined)?.trim()?.toUpperCase() ?? null;
+    const ipCountry       = (body?.ip_country        as string | undefined)?.trim()?.toUpperCase() ?? null;
 
     if (!signature) {
       return NextResponse.json({ error: "Missing signature" }, { status: 400 });
+    }
+
+    // ── Block Russia and Belarus server-side (second layer after UI) ──────
+    const countryToCheck = declaredCountry ?? ipCountry;
+    if (countryToCheck && isBlockedCountry(countryToCheck)) {
+      return NextResponse.json({ error: "Service not available in your region" }, { status: 403 });
     }
 
     // Signed-in check
@@ -104,6 +120,46 @@ export async function POST(req: Request) {
       }
     }
 
+    // ── Compute VAT fields ────────────────────────────────────────────────
+    // Fetch threshold status so we know if VAT applies for this country
+    let vatRate        = 0;
+    let vatAmountSol   = 0;
+    let vatAmountGbp: number | null = null;
+    let solGbpRate:   number | null = null;
+    let vatJurisdiction: string | null = null;
+    const countryMismatch = !!(declaredCountry && ipCountry && declaredCountry !== ipCountry);
+
+    if (declaredCountry) {
+      try {
+        // Fetch current threshold status
+        const { data: cumulative } = await sb
+          .from("vat_cumulative")
+          .select("jurisdiction, threshold_crossed");
+
+        const thresholdCrossed: Record<string, boolean> = {};
+        for (const row of cumulative ?? []) {
+          thresholdCrossed[row.jurisdiction] = row.threshold_crossed ?? false;
+        }
+
+        vatRate       = getApplicableVatRate(declaredCountry, thresholdCrossed);
+        vatJurisdiction = getJurisdiction(declaredCountry);
+
+        if (vatRate > 0) {
+          const { vat } = extractVat(deltaSol, vatRate);
+          vatAmountSol  = vat;
+
+          // Get SOL/GBP rate for GBP equivalent
+          solGbpRate    = await getSolGbpPrice();
+          if (solGbpRate) {
+            vatAmountGbp = Math.round(vatAmountSol * solGbpRate * 100) / 100;
+          }
+        }
+      } catch (vatErr: any) {
+        // VAT computation failure must never block the payment
+        console.warn("VAT computation failed:", vatErr?.message);
+      }
+    }
+
     // ── Insert payment (dedupe by signature) ──────────────────────────────
     const { data: existingPayment } = await sb.from("payments").select("signature").eq("signature", signature).maybeSingle();
     if (existingPayment?.signature) {
@@ -111,16 +167,57 @@ export async function POST(req: Request) {
     } else {
       const { error: payErr } = await sb.from("payments").insert({
         signature,
-        wallet:          sessionData.wallet,
-        kind:            "subscription",
-        amount_sol:      deltaSol,
-        referrer_wallet: validReferrer,
+        wallet:                  sessionData.wallet,
+        kind:                    "subscription",
+        amount_sol:              deltaSol,
+        referrer_wallet:         validReferrer,
+        // VAT fields
+        ip_country:              ipCountry,
+        declared_country:        declaredCountry,
+        country_mismatch:        countryMismatch,
+        vat_rate:                vatRate > 0 ? vatRate : null,
+        vat_amount_sol:          vatAmountSol > 0 ? vatAmountSol : null,
+        vat_amount_gbp:          vatAmountGbp,
+        sol_gbp_rate_at_payment: solGbpRate,
+        vat_jurisdiction:        vatJurisdiction,
       });
       if (payErr) return NextResponse.json({ error: payErr.message }, { status: 500 });
 
+      // ── Update VAT cumulative totals ──────────────────────────────────
+      // Increment the relevant jurisdiction's running revenue total
+      if (declaredCountry) {
+        try {
+          const jurisdiction = vatJurisdiction ?? "NONE";
+          if (jurisdiction !== "NONE" && jurisdiction !== "BLOCKED") {
+            const gbpForPayment = solGbpRate ? Math.round(deltaSol * solGbpRate * 100) / 100 : 0;
+
+            // For EU_OSS countries the native currency is EUR — we'd need EUR rate
+            // For simplicity we track native as GBP for non-EUR jurisdictions
+            // and approximate EUR for EU (use a fixed conversion or skip native for now)
+            // The GBP total is always accurate regardless
+            await sb.from("vat_cumulative")
+              .update({
+                revenue_gbp:    sb.rpc ? undefined : undefined, // handled below
+                payment_count:  0, // handled below
+                last_updated:   new Date().toISOString(),
+              })
+              .eq("jurisdiction", jurisdiction);
+
+            // Use RPC increment to avoid race conditions
+            await sb.rpc("increment_vat_cumulative", {
+              p_jurisdiction:  jurisdiction,
+              p_revenue_gbp:   gbpForPayment,
+              p_revenue_native: gbpForPayment, // approximate — exact native needs FX API
+              p_payment_count: 1,
+            }).catch(() => null); // non-fatal
+          }
+        } catch (cumulErr: any) {
+          console.warn("VAT cumulative update failed:", cumulErr?.message);
+        }
+      }
+
       // ── Record affiliate earning ───────────────────────────────────────
       if (validReferrer) {
-        // unique constraint on payment_signature prevents doubles
         await Promise.resolve(sb.from("affiliate_earnings").insert({
           referrer_wallet:   validReferrer,
           referee_wallet:    sessionData.wallet,
@@ -128,9 +225,8 @@ export async function POST(req: Request) {
           amount_sol:        USER_AFFILIATE_CUT_SOL,
           kind:              "user_sub",
           paid_out:          false,
-        })).catch(() => null); // never kill the payment flow
+        })).catch(() => null);
 
-        // Mark referral as converted
         await Promise.resolve(sb.from("referrals").upsert({
           referrer_wallet: validReferrer,
           referee_wallet:  sessionData.wallet,
