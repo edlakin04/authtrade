@@ -191,18 +191,6 @@ export async function POST(req: Request) {
           if (jurisdiction !== "NONE" && jurisdiction !== "BLOCKED") {
             const gbpForPayment = solGbpRate ? Math.round(deltaSol * solGbpRate * 100) / 100 : 0;
 
-            // For EU_OSS countries the native currency is EUR — we'd need EUR rate
-            // For simplicity we track native as GBP for non-EUR jurisdictions
-            // and approximate EUR for EU (use a fixed conversion or skip native for now)
-            // The GBP total is always accurate regardless
-            await sb.from("vat_cumulative")
-              .update({
-                revenue_gbp:    sb.rpc ? undefined : undefined, // handled below
-                payment_count:  0, // handled below
-                last_updated:   new Date().toISOString(),
-              })
-              .eq("jurisdiction", jurisdiction);
-
             // Use RPC increment to avoid race conditions
             await Promise.resolve(sb.rpc("increment_vat_cumulative", {
               p_jurisdiction:  jurisdiction,
