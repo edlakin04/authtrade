@@ -3,6 +3,13 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { cookies } from "next/headers";
 import { readSessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import {
+  isBlockedCountry,
+  getApplicableVatRate,
+  getJurisdiction,
+  extractVat,
+} from "@/lib/vatRules";
+import { getSolGbpPrice } from "@/lib/solPrice";
 
 const REF_COOKIE_NAME = "authswap_ref";
 const DEV_AFFILIATE_CUT_SOL = 1.0;  // affiliate earns 1 SOL per dev subscription payment
@@ -10,8 +17,17 @@ const DEV_AFFILIATE_CUT_SOL = 1.0;  // affiliate earns 1 SOL per dev subscriptio
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => null);
-    const signature = body?.signature as string | undefined;
+    const signature       = (body?.signature        as string | undefined)?.trim();
+    const declaredCountry = (body?.declared_country  as string | undefined)?.trim()?.toUpperCase() ?? null;
+    const ipCountry       = (body?.ip_country        as string | undefined)?.trim()?.toUpperCase() ?? null;
+
     if (!signature) return NextResponse.json({ error: "Missing signature" }, { status: 400 });
+
+    // ── Block Russia and Belarus server-side ──────────────────────────────
+    const countryToCheck = declaredCountry ?? ipCountry;
+    if (countryToCheck && isBlockedCountry(countryToCheck)) {
+      return NextResponse.json({ error: "Service not available in your region" }, { status: 403 });
+    }
 
     const cookieStore = await cookies();
     const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
@@ -94,17 +110,72 @@ export async function POST(req: Request) {
       }
     }
 
+    // ── Compute VAT fields ────────────────────────────────────────────────
+    let vatRate         = 0;
+    let vatAmountSol    = 0;
+    let vatAmountGbp:  number | null = null;
+    let solGbpRate:    number | null = null;
+    let vatJurisdiction: string | null = null;
+    const countryMismatch = !!(declaredCountry && ipCountry && declaredCountry !== ipCountry);
+
+    if (declaredCountry) {
+      try {
+        const { data: cumulative } = await sb
+          .from("vat_cumulative")
+          .select("jurisdiction, threshold_crossed");
+
+        const thresholdCrossed: Record<string, boolean> = {};
+        for (const row of cumulative ?? []) {
+          thresholdCrossed[row.jurisdiction] = row.threshold_crossed ?? false;
+        }
+
+        vatRate        = getApplicableVatRate(declaredCountry, thresholdCrossed);
+        vatJurisdiction = getJurisdiction(declaredCountry);
+
+        if (vatRate > 0) {
+          const { vat } = extractVat(deltaSol, vatRate);
+          vatAmountSol   = vat;
+          solGbpRate     = await getSolGbpPrice();
+          if (solGbpRate) {
+            vatAmountGbp = Math.round(vatAmountSol * solGbpRate * 100) / 100;
+          }
+        }
+      } catch (vatErr: any) {
+        console.warn("VAT computation failed:", vatErr?.message);
+      }
+    }
+
     // ── Dedupe payment ────────────────────────────────────────────────────
     const { data: existing } = await sb.from("payments").select("signature").eq("signature", signature).maybeSingle();
     if (!existing?.signature) {
       const { error: payErr } = await sb.from("payments").insert({
         signature,
-        wallet:          sessionData.wallet,
-        kind:            "dev_fee",
-        amount_sol:      deltaSol,
-        referrer_wallet: validReferrer,
+        wallet:                  sessionData.wallet,
+        kind:                    "dev_fee",
+        amount_sol:              deltaSol,
+        referrer_wallet:         validReferrer,
+        // VAT fields
+        ip_country:              ipCountry,
+        declared_country:        declaredCountry,
+        country_mismatch:        countryMismatch,
+        vat_rate:                vatRate > 0 ? vatRate : null,
+        vat_amount_sol:          vatAmountSol > 0 ? vatAmountSol : null,
+        vat_amount_gbp:          vatAmountGbp,
+        sol_gbp_rate_at_payment: solGbpRate,
+        vat_jurisdiction:        vatJurisdiction,
       });
       if (payErr) return NextResponse.json({ error: payErr.message }, { status: 500 });
+
+      // ── Update VAT cumulative totals ──────────────────────────────────
+      if (declaredCountry && vatJurisdiction && vatJurisdiction !== "NONE" && vatJurisdiction !== "BLOCKED") {
+        const gbpForPayment = solGbpRate ? Math.round(deltaSol * solGbpRate * 100) / 100 : 0;
+        await sb.rpc("increment_vat_cumulative", {
+          p_jurisdiction:   vatJurisdiction,
+          p_revenue_gbp:    gbpForPayment,
+          p_revenue_native: gbpForPayment,
+          p_payment_count:  1,
+        }).catch(() => null);
+      }
 
       // ── Record affiliate earning ───────────────────────────────────────
       if (validReferrer) {
