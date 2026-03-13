@@ -24,8 +24,8 @@ export async function POST(req: Request) {
     const rpcUrl = process.env.SOLANA_RPC_URL;
     if (!rpcUrl) return NextResponse.json({ error: "Server missing SOLANA_RPC_URL" }, { status: 500 });
 
-    const devTreasury = process.env.DEV_TREASURY_WALLET;
-    if (!devTreasury) return NextResponse.json({ error: "Server missing DEV_TREASURY_WALLET" }, { status: 500 });
+    const devTreasury = process.env.TREASURY_WALLET;
+    if (!devTreasury) return NextResponse.json({ error: "Server missing TREASURY_WALLET" }, { status: 500 });
 
     const feeSol = Number(process.env.DEV_FEE_SOL ?? "0");
     if (!Number.isFinite(feeSol) || feeSol <= 0) {
