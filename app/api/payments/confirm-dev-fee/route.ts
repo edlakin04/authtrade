@@ -169,12 +169,12 @@ export async function POST(req: Request) {
       // ── Update VAT cumulative totals ──────────────────────────────────
       if (declaredCountry && vatJurisdiction && vatJurisdiction !== "NONE" && vatJurisdiction !== "BLOCKED") {
         const gbpForPayment = solGbpRate ? Math.round(deltaSol * solGbpRate * 100) / 100 : 0;
-        await sb.rpc("increment_vat_cumulative", {
+        await Promise.resolve(sb.rpc("increment_vat_cumulative", {
           p_jurisdiction:   vatJurisdiction,
           p_revenue_gbp:    gbpForPayment,
           p_revenue_native: gbpForPayment,
           p_payment_count:  1,
-        }).catch(() => null);
+        })).catch(() => null);
       }
 
       // ── Record affiliate earning ───────────────────────────────────────
