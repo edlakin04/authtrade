@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import UpgradeModal from "@/components/UpgradeModal";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
@@ -36,6 +36,72 @@ export default function GetStartedModal({
   // Trial state (read from server after sign-in)
   const [upgradeOpen, setUpgradeOpen] = useState(false);
 
+  // ── Country / VAT state ──────────────────────────────────────────────────
+  const [geoLoading,      setGeoLoading]      = useState(false);
+  const [ipCountry,       setIpCountry]       = useState<string | null>(null);
+  const [declaredCountry, setDeclaredCountry] = useState<string>("");
+  const [countryMismatch, setCountryMismatch] = useState(false);
+  const [isBlocked,       setIsBlocked]       = useState(false);
+
+  const BLOCKED_CODES = useMemo(() => new Set(["RU", "BY"]), []);
+
+  const ALL_COUNTRIES = useMemo(() => [
+    { code: "AF", name: "Afghanistan" }, { code: "AL", name: "Albania" },
+    { code: "DZ", name: "Algeria" }, { code: "AR", name: "Argentina" },
+    { code: "AM", name: "Armenia" }, { code: "AU", name: "Australia" },
+    { code: "AT", name: "Austria" }, { code: "AZ", name: "Azerbaijan" },
+    { code: "BH", name: "Bahrain" }, { code: "BD", name: "Bangladesh" },
+    { code: "BY", name: "Belarus" }, { code: "BE", name: "Belgium" },
+    { code: "BO", name: "Bolivia" }, { code: "BA", name: "Bosnia and Herzegovina" },
+    { code: "BR", name: "Brazil" }, { code: "BN", name: "Brunei" },
+    { code: "BG", name: "Bulgaria" }, { code: "CA", name: "Canada" },
+    { code: "CL", name: "Chile" }, { code: "CN", name: "China" },
+    { code: "CO", name: "Colombia" }, { code: "CR", name: "Costa Rica" },
+    { code: "HR", name: "Croatia" }, { code: "CY", name: "Cyprus" },
+    { code: "CZ", name: "Czech Republic" }, { code: "DK", name: "Denmark" },
+    { code: "DO", name: "Dominican Republic" }, { code: "EC", name: "Ecuador" },
+    { code: "EG", name: "Egypt" }, { code: "EE", name: "Estonia" },
+    { code: "ET", name: "Ethiopia" }, { code: "FI", name: "Finland" },
+    { code: "FR", name: "France" }, { code: "GE", name: "Georgia" },
+    { code: "DE", name: "Germany" }, { code: "GH", name: "Ghana" },
+    { code: "GR", name: "Greece" }, { code: "GT", name: "Guatemala" },
+    { code: "HK", name: "Hong Kong" }, { code: "HU", name: "Hungary" },
+    { code: "IS", name: "Iceland" }, { code: "IN", name: "India" },
+    { code: "ID", name: "Indonesia" }, { code: "IQ", name: "Iraq" },
+    { code: "IE", name: "Ireland" }, { code: "IL", name: "Israel" },
+    { code: "IT", name: "Italy" }, { code: "JM", name: "Jamaica" },
+    { code: "JP", name: "Japan" }, { code: "JO", name: "Jordan" },
+    { code: "KZ", name: "Kazakhstan" }, { code: "KE", name: "Kenya" },
+    { code: "KW", name: "Kuwait" }, { code: "LV", name: "Latvia" },
+    { code: "LB", name: "Lebanon" }, { code: "LI", name: "Liechtenstein" },
+    { code: "LT", name: "Lithuania" }, { code: "LU", name: "Luxembourg" },
+    { code: "MY", name: "Malaysia" }, { code: "MT", name: "Malta" },
+    { code: "MX", name: "Mexico" }, { code: "MD", name: "Moldova" },
+    { code: "MC", name: "Monaco" }, { code: "MN", name: "Mongolia" },
+    { code: "ME", name: "Montenegro" }, { code: "MA", name: "Morocco" },
+    { code: "NL", name: "Netherlands" }, { code: "NZ", name: "New Zealand" },
+    { code: "NG", name: "Nigeria" }, { code: "NO", name: "Norway" },
+    { code: "OM", name: "Oman" }, { code: "PK", name: "Pakistan" },
+    { code: "PA", name: "Panama" }, { code: "PY", name: "Paraguay" },
+    { code: "PE", name: "Peru" }, { code: "PH", name: "Philippines" },
+    { code: "PL", name: "Poland" }, { code: "PT", name: "Portugal" },
+    { code: "QA", name: "Qatar" }, { code: "RO", name: "Romania" },
+    { code: "RU", name: "Russia" }, { code: "SA", name: "Saudi Arabia" },
+    { code: "RS", name: "Serbia" }, { code: "SG", name: "Singapore" },
+    { code: "SK", name: "Slovakia" }, { code: "SI", name: "Slovenia" },
+    { code: "ZA", name: "South Africa" }, { code: "KR", name: "South Korea" },
+    { code: "ES", name: "Spain" }, { code: "LK", name: "Sri Lanka" },
+    { code: "SE", name: "Sweden" }, { code: "CH", name: "Switzerland" },
+    { code: "TW", name: "Taiwan" }, { code: "TH", name: "Thailand" },
+    { code: "TN", name: "Tunisia" }, { code: "TR", name: "Turkey" },
+    { code: "UA", name: "Ukraine" }, { code: "AE", name: "United Arab Emirates" },
+    { code: "GB", name: "United Kingdom" }, { code: "US", name: "United States" },
+    { code: "UY", name: "Uruguay" }, { code: "UZ", name: "Uzbekistan" },
+    { code: "VE", name: "Venezuela" }, { code: "VN", name: "Vietnam" },
+    { code: "YE", name: "Yemen" }, { code: "ZM", name: "Zambia" },
+    { code: "ZW", name: "Zimbabwe" },
+  ].sort((a, b) => a.name.localeCompare(b.name)), []);
+
   const [trialStatus, setTrialStatus] = useState<{
     trialEligible: boolean;
     trialActive: boolean;
@@ -45,7 +111,32 @@ export default function GetStartedModal({
 
   const shouldPromptSubscribe = useMemo(() => params.get("subscribe") === "1", [params]);
 
+  // Detect country when subscribe step is shown
+  const fetchGeo = useCallback(async () => {
+    setGeoLoading(true);
+    try {
+      const res  = await fetch("/api/vat/lookup", { cache: "no-store" });
+      const json = await res.json().catch(() => null);
+      if (json?.detected?.countryCode) {
+        const code = json.detected.countryCode as string;
+        setIpCountry(code);
+        setDeclaredCountry(code);
+        setIsBlocked(json.blocked ?? BLOCKED_CODES.has(code));
+      }
+    } catch { /* silent */ } finally {
+      setGeoLoading(false);
+    }
+  }, [BLOCKED_CODES]);
 
+  useEffect(() => {
+    if (step === "subscribe" && !ipCountry) fetchGeo();
+  }, [step, ipCountry, fetchGeo]);
+
+  useEffect(() => {
+    if (!ipCountry || !declaredCountry) { setCountryMismatch(false); return; }
+    setCountryMismatch(ipCountry !== declaredCountry && !BLOCKED_CODES.has(declaredCountry));
+    setIsBlocked(BLOCKED_CODES.has(declaredCountry));
+  }, [ipCountry, declaredCountry, BLOCKED_CODES]);
 
   if (!open) return null;
 
@@ -230,7 +321,11 @@ export default function GetStartedModal({
         const confirmRes = await fetch("/api/payments/confirm-subscription", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ signature: sig })
+          body: JSON.stringify({
+            signature:        sig,
+            declared_country: declaredCountry,
+            ip_country:       ipCountry,
+          }),
         });
 
         if (confirmRes.ok) {
@@ -350,6 +445,34 @@ export default function GetStartedModal({
             </button>
           ) : (
             <div className="space-y-3">
+              {/* Country selector */}
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1.5">
+                  Where are you based?
+                </label>
+                <select
+                  value={declaredCountry}
+                  onChange={(e) => setDeclaredCountry(e.target.value)}
+                  disabled={geoLoading || loading === "pay"}
+                  className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white focus:outline-none focus:border-white/30 disabled:opacity-60"
+                >
+                  <option value="">{geoLoading ? "Detecting location…" : "Select your country"}</option>
+                  {ALL_COUNTRIES.map((c) => (
+                    <option key={c.code} value={c.code}>{c.name}</option>
+                  ))}
+                </select>
+                {countryMismatch && declaredCountry && (
+                  <p className="mt-1.5 text-xs text-amber-400">
+                    ⚠ Your location appears different from your selection — please make sure your country is correct.
+                  </p>
+                )}
+                {isBlocked && (
+                  <p className="mt-1.5 text-xs text-red-400">
+                    Authswap is not available in your region.
+                  </p>
+                )}
+              </div>
+
               {/* Paid subscription */}
               <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3">
                 <div className="flex items-center justify-between text-sm text-emerald-200">
@@ -371,7 +494,7 @@ export default function GetStartedModal({
 
                 <button
                   className="mt-3 w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-zinc-200 disabled:opacity-60"
-                  disabled={loading === "pay"}
+                  disabled={loading === "pay" || isBlocked || !declaredCountry}
                   onClick={handleStartSubscription}
                 >
                   {loading === "pay" ? "Processing..." : subscribeBtn}
