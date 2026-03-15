@@ -14,7 +14,10 @@ async function rpc(urlOrigin: string, method: string, params: any[] = []) {
 
   const res = await fetch(`${urlOrigin}/api/rpc`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "x-authswap-internal": process.env.INTERNAL_RPC_SECRET ?? "",
+    },
     body: JSON.stringify(body),
     cache: "no-store"
   });
