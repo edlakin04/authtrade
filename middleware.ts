@@ -3,22 +3,34 @@ import type { NextRequest } from "next/server";
 import { SESSION_COOKIE_NAME } from "@/lib/auth";
 import { SUB_COOKIE_NAME, readSubToken } from "@/lib/subscription";
 import { ROLE_COOKIE_NAME, readRoleToken } from "@/lib/role";
+import { rateLimit, getIp, getTierForPath, rateLimitResponse } from "@/lib/rateLimit";
 
 // ─── Route classification ─────────────────────────────────────────────────────
 
-// All routes that require at least a session (signed in)
-const PROTECTED_PREFIXES = ["/dashboard", "/coins", "/account", "/subscription", "/dev", "/community", "/trade", "/coin", "/affiliate"];
-
-// Trial users can access ALL protected routes — actions are blocked at the API level only
-// No TRIAL_ALLOWED_PREFIXES restriction needed
+const PROTECTED_PREFIXES = [
+  "/dashboard", "/coins", "/account", "/subscription",
+  "/dev", "/community", "/trade", "/coin", "/affiliate",
+];
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
+  // ── Rate limiting — applied to ALL API routes ─────────────────────────────
+  if (pathname.startsWith("/api/")) {
+    const ip     = getIp(req);
+    const tier   = getTierForPath(pathname);
+    const result = await rateLimit(ip, tier);
+
+    if (result.limited) {
+      return rateLimitResponse(result);
+    }
+  }
+
+  // ── Page route protection ─────────────────────────────────────────────────
   const isProtected = PROTECTED_PREFIXES.some((p) => pathname.startsWith(p));
   if (!isProtected) return NextResponse.next();
 
-  // ── 1. Must be signed in ───────────────────────────────────────────────────
+  // ── 1. Must be signed in ──────────────────────────────────────────────────
   const session = req.cookies.get(SESSION_COOKIE_NAME)?.value;
   if (!session) {
     const url = req.nextUrl.clone();
@@ -26,7 +38,7 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // ── 2. Devs and admins bypass everything ───────────────────────────────────
+  // ── 2. Devs and admins bypass subscription check ──────────────────────────
   const roleToken = req.cookies.get(ROLE_COOKIE_NAME)?.value;
   if (roleToken) {
     const decodedRole = await readRoleToken(roleToken).catch(() => null);
@@ -35,29 +47,27 @@ export async function middleware(req: NextRequest) {
     }
   }
 
-  // ── 3. Read sub/trial cookie ───────────────────────────────────────────────
+  // ── 3. Read sub/trial cookie ──────────────────────────────────────────────
   const subToken = req.cookies.get(SUB_COOKIE_NAME)?.value;
 
-  // No cookie at all → redirect to subscribe
   if (!subToken) {
-    return redirectToSubscribe(req, "subscribe");
+    return redirectToSubscribe(req);
   }
 
   const decodedSub = await readSubToken(subToken).catch(() => null);
 
-  // Invalid or expired cookie → redirect to subscribe
   if (!decodedSub || decodedSub.paidUntilMs <= Date.now()) {
-    return redirectToSubscribe(req, "subscribe");
+    return redirectToSubscribe(req);
   }
 
-  // ── 4. Trial or paid — both get full page access ─────────────────────────
+  // ── 4. Trial or paid — both get full page access ──────────────────────────
   // Write actions are blocked at the API level via requireFullAccess()
   return NextResponse.next();
 }
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
-function redirectToSubscribe(req: NextRequest, reason: "subscribe" | "trial_upgrade" = "subscribe") {
+function redirectToSubscribe(req: NextRequest) {
   const url = req.nextUrl.clone();
   url.pathname = "/";
   url.searchParams.set("subscribe", "1");
@@ -66,6 +76,9 @@ function redirectToSubscribe(req: NextRequest, reason: "subscribe" | "trial_upgr
 
 export const config = {
   matcher: [
+    // All API routes get rate limited
+    "/api/:path*",
+    // Page routes get auth checked
     "/dashboard/:path*",
     "/coins/:path*",
     "/coin/:path*",
@@ -75,5 +88,5 @@ export const config = {
     "/community/:path*",
     "/trade/:path*",
     "/affiliate/:path*",
-  ]
+  ],
 };
