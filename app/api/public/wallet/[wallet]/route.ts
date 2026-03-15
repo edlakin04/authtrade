@@ -7,7 +7,10 @@ export const dynamic = "force-dynamic";
 async function rpc(origin: string, method: string, params: any[] = []) {
   const res = await fetch(`${origin}/api/rpc`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "x-authswap-internal": process.env.INTERNAL_RPC_SECRET ?? "",
+    },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
     cache: "no-store"
   });
